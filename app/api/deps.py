@@ -33,3 +33,14 @@ def get_feeding_trainer(request: Request) -> XGBoostFeedingTrainer:
 def get_database_session() -> Generator[Session, None, None]:
     """Dependency cung cấp phiên làm việc CSDL TimescaleDB/PostgreSQL"""
     yield from get_db()
+
+
+def get_redis_cache(request: Request):
+    """Dependency cung cấp Redis Cache Service từ app.state"""
+    redis_svc = getattr(request.app.state, "redis_service", None)
+    if redis_svc is None:
+        from app.services.redis_cache import RedisCacheService
+        redis_svc = RedisCacheService()
+        request.app.state.redis_service = redis_svc
+    return redis_svc
+

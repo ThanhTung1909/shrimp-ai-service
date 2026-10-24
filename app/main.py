@@ -74,9 +74,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.feeding_trainer = None
         app.state.model_metadata = {}
 
+    # 2. Khởi tạo Redis Cache Service bất đồng bộ
+    from app.services.redis_cache import RedisCacheService
+    redis_service = RedisCacheService()
+    app.state.redis_service = redis_service
+    is_redis_ready = await redis_service.ping()
+    if is_redis_ready:
+        logger.info("[Lifespan Redis] Kết nối Redis Cache Server thành công (TTL 1800s).")
+    else:
+        logger.warning("[Lifespan Redis Warning] Redis Server chưa sẵn sàng, kích hoạt chế độ Graceful Degradation.")
+
     yield
 
     # Dọn dẹp tài nguyên khi tắt service
+    if hasattr(app.state, "redis_service") and app.state.redis_service is not None:
+        await app.state.redis_service.close()
     logger.info("Dọn dẹp tài nguyên và tắt AquaSense AI Microservice.")
 
 
@@ -211,6 +223,11 @@ async def health_check():
     # Kiểm tra database nhanh (không block nếu offline)
     db_status = check_db_connection()
 
+    # Kiểm tra Redis nhanh
+    redis_connected = False
+    if hasattr(app.state, "redis_service") and app.state.redis_service is not None:
+        redis_connected = await app.state.redis_service.ping()
+
     return {
         "status": "ok" if is_model_loaded else "degraded",
         "service": "AquaSense AI Microservice",
@@ -219,6 +236,7 @@ async def health_check():
         "model_loaded": is_model_loaded,
         "model_version": model_version,
         "database": db_status,
+        "redis": {"connected": redis_connected},
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 

@@ -17,8 +17,9 @@ Do Backend-Integration-Agent chủ trì.
 from datetime import datetime, timezone
 import logging
 from typing import List, Tuple
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
+from app.api.deps import get_redis_cache
 from app.models.soft_sensor import (
     analyze_do_saturation_status,
     benson_krause_do_saturation,
@@ -28,6 +29,7 @@ from app.schemas.prediction import (
     NestJSPredictResponse,
     NestJSRiskLevel,
 )
+from app.services.redis_cache import RedisCacheService
 
 logger = logging.getLogger("ai_service.api.predictions")
 
@@ -112,9 +114,13 @@ def compute_water_quality_forecast(
     summary="Dự báo chất lượng nước (Tương thích NestJS PredictionsService)",
     description="Nhận telemetry và trả về predictedDO, predictedPH, riskScore, riskLevel, alert, factors.",
 )
-async def predict_water_quality(request: NestJSPredictRequest) -> NestJSPredictResponse:
+async def predict_water_quality(
+    request: NestJSPredictRequest,
+    redis_cache: RedisCacheService = Depends(get_redis_cache),
+) -> NestJSPredictResponse:
     """
-    Endpoint tương thích 100% với Core Backend NestJS PredictionsService
+    Endpoint tương thích 100% với Core Backend NestJS PredictionsService.
+    Tự động đồng bộ kết quả vào Redis Cache với TTL 1800s.
     """
     pred_do, pred_ph, risk_score, risk_level, alert, factors = compute_water_quality_forecast(request)
 
@@ -123,7 +129,7 @@ async def predict_water_quality(request: NestJSPredictRequest) -> NestJSPredictR
         f"Score: {risk_score} | Level: {risk_level.value} | Alert: {alert}"
     )
 
-    return NestJSPredictResponse(
+    response_data = NestJSPredictResponse(
         predictedDO=pred_do,
         predictedPH=pred_ph,
         riskScore=risk_score,
@@ -132,3 +138,33 @@ async def predict_water_quality(request: NestJSPredictRequest) -> NestJSPredictR
         factors=factors,
         timestamp=datetime.now(timezone.utc).isoformat(),
     )
+
+    # Lưu kết quả vào Redis cache bất đồng bộ nếu có pond_id
+    if request.pond_id:
+        await redis_cache.set_water_quality_forecast(request.pond_id, response_data.model_dump())
+
+    return response_data
+
+
+@router.get(
+    "/predict/{pond_id}/latest",
+    response_model=NestJSPredictResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Lấy kết quả dự báo chất lượng nước mới nhất từ Redis Cache",
+    description="Truy xuất nhanh kết quả dự báo chất lượng nước trong < 5ms cho Web Portal và Mobile App.",
+)
+async def get_latest_water_quality_prediction(
+    pond_id: str,
+    redis_cache: RedisCacheService = Depends(get_redis_cache),
+) -> NestJSPredictResponse:
+    """
+    Truy xuất kết quả dự báo chất lượng nước mới nhất từ Redis Cache
+    """
+    cached = await redis_cache.get_water_quality_forecast(pond_id)
+    if not cached:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Chưa có dữ liệu dự báo chất lượng nước trong cache cho ao: {pond_id}",
+        )
+    return NestJSPredictResponse(**cached)
+

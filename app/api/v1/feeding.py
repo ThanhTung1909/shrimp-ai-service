@@ -11,13 +11,14 @@ import time
 from typing import Dict, Tuple
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.deps import get_feeding_trainer
+from app.api.deps import get_feeding_trainer, get_redis_cache
 from app.models.xgboost_feeding import XGBoostFeedingTrainer
 from app.schemas.feeding import (
     FeedingForecastRequest,
     FeedingForecastResponse,
     FeedingRiskLevel,
 )
+from app.services.redis_cache import RedisCacheService
 
 logger = logging.getLogger("ai_service.api.feeding")
 
@@ -114,9 +115,11 @@ def analyze_feeding_risk_and_recommendation(
 async def forecast_feeding(
     request: FeedingForecastRequest,
     trainer: XGBoostFeedingTrainer = Depends(get_feeding_trainer),
+    redis_cache: RedisCacheService = Depends(get_redis_cache),
 ) -> FeedingForecastResponse:
     """
     Endpoint dự báo lượng thức ăn với độ trễ siêu thấp (< 50ms trong RAM).
+    Tự động đồng bộ kết quả vào Redis Cache với TTL 1800s.
     """
     t0 = time.perf_counter()
 
@@ -125,7 +128,6 @@ async def forecast_feeding(
         features = request.to_feature_list()
 
         # 2. Suy luận lượng thức ăn thô qua XGBoost đã nạp trong RAM
-        # is_scaled=False vì trainer sẽ sử dụng feeding_scaler nạp sẵn
         raw_pred = trainer.predict(features, is_scaled=False)
         predicted_kg = float(raw_pred[0])
 
@@ -147,7 +149,7 @@ async def forecast_feeding(
             f"Rec: {recommended_feed:.2f}kg | Risk: {risk_level.value} | Latency: {latency_ms}ms"
         )
 
-        return FeedingForecastResponse(
+        response_data = FeedingForecastResponse(
             pond_id=request.pond_id,
             recommended_feed_kg=recommended_feed,
             risk_level=risk_level,
@@ -159,9 +161,39 @@ async def forecast_feeding(
             computed_at=datetime.now(timezone.utc).isoformat(),
         )
 
+        # 5. Lưu kết quả vào Redis cache bất đồng bộ (không block nếu offline)
+        if request.pond_id:
+            await redis_cache.set_feeding_forecast(request.pond_id, response_data.model_dump())
+
+        return response_data
+
     except Exception as e:
         logger.error(f"[Feeding Forecast Error] {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Lỗi suy luận mô hình dự báo thức ăn: {str(e)}",
         )
+
+
+@router.get(
+    "/forecast-feeding/{pond_id}/latest",
+    response_model=FeedingForecastResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Lấy kết quả dự báo lượng thức ăn mới nhất từ Redis Cache",
+    description="Truy xuất nhanh kết quả dự báo trong < 5ms cho Web Portal và Mobile App.",
+)
+async def get_latest_feeding_forecast(
+    pond_id: str,
+    redis_cache: RedisCacheService = Depends(get_redis_cache),
+) -> FeedingForecastResponse:
+    """
+    Truy xuất kết quả dự báo thức ăn mới nhất từ Redis Cache
+    """
+    cached = await redis_cache.get_feeding_forecast(pond_id)
+    if not cached:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Chưa có dữ liệu dự báo được lưu trong cache cho ao: {pond_id}",
+        )
+    return FeedingForecastResponse(**cached)
+
