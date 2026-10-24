@@ -48,4 +48,5 @@ htmlcov/
 # Model checkpoints & scratch files
 scratch/
 *.joblib
+!trained_models/*.joblib
 !trained_models/.gitkeep

@@ -6,7 +6,8 @@ Do Data-Pipeline-Agent chủ trì.
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Union
+from typing import Optional, Union, Sequence, Generator, List, Tuple
+import numpy as np
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -449,3 +450,145 @@ def extract_features_from_pond_state(
         previous_feed=previous_feed,
         water_exchange_ratio=water_exchange_ratio,
     )
+
+
+# ==============================================================================
+# TASK-DP-04: Phân Chia Time-Blocked / TimeSeriesSplit & StandardScaler Chống Rò Rỉ
+# ==============================================================================
+
+from pathlib import Path
+from typing import Generator, List, Tuple
+import joblib
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.preprocessing import StandardScaler
+
+
+class TimeSeriesDataPipeline:
+    """
+    Pipeline tiền xử lý dữ liệu và phân chia tập dữ liệu chuỗi thời gian.
+    Tuân thủ tuyệt đối Anti-Data Leakage Rule:
+    - Không shuffle ngẫu nhiên dữ liệu chuỗi thời gian.
+    - StandardScaler chỉ được phép khớp (fit) trên tập Train.
+    - Tập Test chỉ được phép transform dựa trên scaler đã fit từ Train.
+    """
+
+    def __init__(
+        self,
+        feature_cols: Sequence[str] = REQUIRED_FEEDING_FEATURES,
+        target_col: str = "feed_amount_kg",
+        scaler_path: str = "trained_models/feeding_scaler.joblib",
+    ):
+        self.feature_cols = list(feature_cols)
+        self.target_col = target_col
+        self.scaler_path = Path(scaler_path)
+        self.scaler: Optional[StandardScaler] = None
+
+    def prepare_time_blocked_split(
+        self,
+        df: pd.DataFrame,
+        test_ratio: float = 0.20,
+        save_scaler: bool = True,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, StandardScaler]:
+        """
+        Phân chia tập dữ liệu theo khối thời gian (Time-Blocked Split):
+        - Đoạn đầu [0 -> T_split] là tập Train.
+        - Đoạn cuối [T_split -> T_end] là tập Test.
+        
+        Quy tắc Anti-Data Leakage:
+        - scaler.fit_transform(X_train)
+        - scaler.transform(X_test)
+        """
+        if df.empty:
+            raise ValueError("DataFrame đầu vào rỗng, không thể phân chia dữ liệu.")
+
+        for col in self.feature_cols:
+            if col not in df.columns:
+                raise ValueError(f"Thiếu đặc trưng bắt buộc: '{col}'. Danh sách yêu cầu: {self.feature_cols}")
+
+        if self.target_col not in df.columns:
+            raise ValueError(f"Thiếu biến mục tiêu: '{self.target_col}'")
+
+        n_samples = len(df)
+        split_idx = int(n_samples * (1.0 - test_ratio))
+
+        if split_idx <= 0 or split_idx >= n_samples:
+            raise ValueError(f"Tỷ lệ test_ratio={test_ratio} không hợp lệ với n_samples={n_samples}")
+
+        # Tách dữ liệu theo đúng trật tự thời gian
+        train_df = df.iloc[:split_idx]
+        test_df = df.iloc[split_idx:]
+
+        X_train_raw = train_df[self.feature_cols].to_numpy(dtype=np.float64)
+        y_train = train_df[self.target_col].to_numpy(dtype=np.float64)
+
+        X_test_raw = test_df[self.feature_cols].to_numpy(dtype=np.float64)
+        y_test = test_df[self.target_col].to_numpy(dtype=np.float64)
+
+        # Anti-Data Leakage: Fit CHỈ trên train set
+        self.scaler = StandardScaler()
+        X_train_scaled = self.scaler.fit_transform(X_train_raw)
+        X_test_scaled = self.scaler.transform(X_test_raw)
+
+        if save_scaler:
+            self.save_scaler()
+
+        logger.info(
+            f"[prepare_time_blocked_split] Train: {X_train_scaled.shape[0]} mẫu, "
+            f"Test: {X_test_scaled.shape[0]} mẫu (test_ratio={test_ratio:.1%}). Scaler đã lưu."
+        )
+
+        return X_train_scaled, y_train, X_test_scaled, y_test, self.scaler
+
+    def get_rolling_origin_folds(
+        self,
+        df: pd.DataFrame,
+        n_splits: int = 5,
+    ) -> Generator[Tuple[int, np.ndarray, np.ndarray, np.ndarray, np.ndarray, StandardScaler], None, None]:
+        """
+        Tạo các fold kiểm định chéo theo nguyên lý Rolling-Origin (TimeSeriesSplit).
+        Trong từng fold, StandardScaler được khởi tạo mới và chỉ fit trên tập train của fold đó.
+        """
+        if len(df) < n_splits + 1:
+            raise ValueError(f"Số lượng mẫu ({len(df)}) quá nhỏ so với số fold n_splits={n_splits}")
+
+        X_raw = df[self.feature_cols].to_numpy(dtype=np.float64)
+        y = df[self.target_col].to_numpy(dtype=np.float64)
+
+        tscv = TimeSeriesSplit(n_splits=n_splits)
+
+        for fold, (train_indices, test_indices) in enumerate(tscv.split(X_raw), 1):
+            X_tr = X_raw[train_indices]
+            y_tr = y[train_indices]
+            X_te = X_raw[test_indices]
+            y_te = y[test_indices]
+
+            fold_scaler = StandardScaler()
+            X_tr_scaled = fold_scaler.fit_transform(X_tr)
+            X_te_scaled = fold_scaler.transform(X_te)  # CHỈ TRANSFORM!
+
+            logger.debug(
+                f"[TimeSeriesSplit Fold {fold}] Train size: {len(train_indices)}, Test size: {len(test_indices)}"
+            )
+
+            yield fold, X_tr_scaled, y_tr, X_te_scaled, y_te, fold_scaler
+
+    def save_scaler(self, path: Optional[Union[str, Path]] = None) -> Path:
+        """Lưu StandardScaler đã fit vào tệp .joblib"""
+        if self.scaler is None:
+            raise ValueError("Scaler chưa được khớp (fit) dữ liệu, không thể lưu.")
+
+        save_to = Path(path) if path else self.scaler_path
+        save_to.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(self.scaler, save_to)
+        logger.info(f"[TimeSeriesDataPipeline] Đã lưu StandardScaler vào: {save_to}")
+        return save_to
+
+    def load_scaler(self, path: Optional[Union[str, Path]] = None) -> StandardScaler:
+        """Đọc StandardScaler từ tệp .joblib"""
+        load_from = Path(path) if path else self.scaler_path
+        if not load_from.exists():
+            raise FileNotFoundError(f"Không tìm thấy file scaler tại: {load_from}")
+
+        self.scaler = joblib.load(load_from)
+        logger.info(f"[TimeSeriesDataPipeline] Đã nạp StandardScaler từ: {load_from}")
+        return self.scaler
