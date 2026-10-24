@@ -44,3 +44,14 @@ def get_redis_cache(request: Request):
         request.app.state.redis_service = redis_svc
     return redis_svc
 
+
+def get_rabbitmq_publisher(request: Request):
+    """Dependency cung cấp RabbitMQ Publisher từ app.state"""
+    rmq_pub = getattr(request.app.state, "rabbitmq_publisher", None)
+    if rmq_pub is None:
+        from app.services.rabbitmq_publisher import RabbitMQPublisher
+        rmq_pub = RabbitMQPublisher()
+        request.app.state.rabbitmq_publisher = rmq_pub
+    return rmq_pub
+
+

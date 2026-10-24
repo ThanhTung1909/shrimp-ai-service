@@ -11,13 +11,18 @@ import time
 from typing import Dict, Tuple
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.deps import get_feeding_trainer, get_redis_cache
+from app.api.deps import (
+    get_feeding_trainer,
+    get_rabbitmq_publisher,
+    get_redis_cache,
+)
 from app.models.xgboost_feeding import XGBoostFeedingTrainer
 from app.schemas.feeding import (
     FeedingForecastRequest,
     FeedingForecastResponse,
     FeedingRiskLevel,
 )
+from app.services.rabbitmq_publisher import RabbitMQPublisher
 from app.services.redis_cache import RedisCacheService
 
 logger = logging.getLogger("ai_service.api.feeding")
@@ -116,10 +121,12 @@ async def forecast_feeding(
     request: FeedingForecastRequest,
     trainer: XGBoostFeedingTrainer = Depends(get_feeding_trainer),
     redis_cache: RedisCacheService = Depends(get_redis_cache),
+    rabbitmq: RabbitMQPublisher = Depends(get_rabbitmq_publisher),
 ) -> FeedingForecastResponse:
     """
     Endpoint dự báo lượng thức ăn với độ trễ siêu thấp (< 50ms trong RAM).
     Tự động đồng bộ kết quả vào Redis Cache với TTL 1800s.
+    Tự động xuất bản sự kiện ai.risk.detected sang RabbitMQ khi rủi ro ở mức HIGH/CRITICAL.
     """
     t0 = time.perf_counter()
 
@@ -164,6 +171,17 @@ async def forecast_feeding(
         # 5. Lưu kết quả vào Redis cache bất đồng bộ (không block nếu offline)
         if request.pond_id:
             await redis_cache.set_feeding_forecast(request.pond_id, response_data.model_dump())
+
+        # 6. Đẩy sự kiện cảnh báo sớm vào RabbitMQ khi phát hiện nguy cơ cao (Task-BE-05)
+        if risk_level in (FeedingRiskLevel.HIGH, FeedingRiskLevel.CRITICAL) and request.pond_id:
+            await rabbitmq.publish_risk_alert(
+                pond_id=request.pond_id,
+                risk_level=risk_level.value,
+                metric="feeding_intake",
+                predicted_value=recommended_feed,
+                action_suggestion=note,
+                details=factors,
+            )
 
         return response_data
 

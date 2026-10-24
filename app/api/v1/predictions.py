@@ -18,8 +18,7 @@ from datetime import datetime, timezone
 import logging
 from typing import List, Tuple
 from fastapi import APIRouter, Depends, HTTPException, status
-
-from app.api.deps import get_redis_cache
+from app.api.deps import get_rabbitmq_publisher, get_redis_cache
 from app.models.soft_sensor import (
     analyze_do_saturation_status,
     benson_krause_do_saturation,
@@ -29,6 +28,7 @@ from app.schemas.prediction import (
     NestJSPredictResponse,
     NestJSRiskLevel,
 )
+from app.services.rabbitmq_publisher import RabbitMQPublisher
 from app.services.redis_cache import RedisCacheService
 
 logger = logging.getLogger("ai_service.api.predictions")
@@ -117,10 +117,12 @@ def compute_water_quality_forecast(
 async def predict_water_quality(
     request: NestJSPredictRequest,
     redis_cache: RedisCacheService = Depends(get_redis_cache),
+    rabbitmq: RabbitMQPublisher = Depends(get_rabbitmq_publisher),
 ) -> NestJSPredictResponse:
     """
     Endpoint tương thích 100% với Core Backend NestJS PredictionsService.
     Tự động đồng bộ kết quả vào Redis Cache với TTL 1800s.
+    Tự động đẩy sự kiện ai.risk.detected sang RabbitMQ khi phát hiện nguy cơ cao.
     """
     pred_do, pred_ph, risk_score, risk_level, alert, factors = compute_water_quality_forecast(request)
 
@@ -139,9 +141,20 @@ async def predict_water_quality(
         timestamp=datetime.now(timezone.utc).isoformat(),
     )
 
-    # Lưu kết quả vào Redis cache bất đồng bộ nếu có pond_id
+    # 1. Lưu kết quả vào Redis cache bất đồng bộ nếu có pond_id
     if request.pond_id:
         await redis_cache.set_water_quality_forecast(request.pond_id, response_data.model_dump())
+
+    # 2. Đẩy sự kiện cảnh báo sớm vào RabbitMQ khi kích hoạt cờ alert
+    if (alert or risk_level == NestJSRiskLevel.DANGER) and request.pond_id:
+        await rabbitmq.publish_risk_alert(
+            pond_id=request.pond_id,
+            risk_level=risk_level.value,
+            metric="dissolved_oxygen",
+            predicted_value=pred_do,
+            action_suggestion=factors[0] if factors else "Chất lượng nước bất thường, cần kiểm tra quạt nước.",
+            details={"riskScore": risk_score, "predictedPH": pred_ph, "factors": factors},
+        )
 
     return response_data
 
