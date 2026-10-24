@@ -1,0 +1,50 @@
+{
+  "model_name": "xgboost_feeding_model",
+  "version": "1.0.0",
+  "model_type": "XGBRegressor",
+  "trained_at": "2026-10-24T04:48:18.728583+00:00",
+  "feature_integrity": {
+    "count": 7,
+    "features": [
+      "shrimp_age",
+      "shrimp_weight",
+      "do_min",
+      "tan_delta",
+      "rain_0600",
+      "previous_feed",
+      "water_exchange_ratio"
+    ],
+    "target": "feed_amount_kg"
+  },
+  "hyperparameters": {
+    "n_estimators": 600,
+    "learning_rate": 0.05,
+    "max_depth": 6,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "random_state": 42,
+    "objective": "reg:squarederror",
+    "n_jobs": -1
+  },
+  "metrics": {
+    "r2": 0.9865,
+    "mape": 6.23,
+    "mae": 1.53,
+    "rmse": 2.45
+  },
+  "feature_importances": {
+    "shrimp_age": 0.18281516432762146,
+    "shrimp_weight": 0.22915473580360413,
+    "do_min": 0.05810811370611191,
+    "tan_delta": 0.0077251712791621685,
+    "rain_0600": 0.05933525785803795,
+    "previous_feed": 0.4582357108592987,
+    "water_exchange_ratio": 0.004625852219760418
+  },
+  "scaler_path": "/private/var/folders/6p/2b1t3l3j5g9cq2l8vvkd_n3m0000gn/T/pytest-of-apple/pytest-10/test_end_to_end_model_meets_sc0/feeding_scaler.joblib",
+  "scientific_acceptance": {
+    "min_r2_threshold": 0.78,
+    "max_mape_threshold": 8.7,
+    "passed": true
+  }
+}
