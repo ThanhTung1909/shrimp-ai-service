@@ -159,3 +159,132 @@ class XGBoostFeedingTrainer:
     def get_hyperparameters(self) -> Dict:
         """Trả về bản sao từ điển siêu tham số"""
         return self.params.copy()
+
+    def evaluate(
+        self,
+        X_test: np.ndarray,
+        y_test: np.ndarray,
+        is_scaled: bool = True,
+        assert_acceptance: bool = False,
+    ) -> Dict[str, float]:
+        """
+        Đánh giá độ chính xác của mô hình trên tập kiểm thử độc lập.
+        
+        Args:
+            X_test: Ma trận kiểm thử chứa 7 biến thực nghiệm.
+            y_test: Vector lượng thức ăn thực tế.
+            is_scaled: True nếu X_test đã qua scaler.transform.
+            assert_acceptance: Nếu True, tự động kiểm tra điều kiện chuẩn khoa học (R2 >= 0.78, MAPE <= 8.7%).
+            
+        Returns:
+            Dict chứa các chỉ số: r2, mape, mae, rmse.
+        """
+        y_pred = self.predict(X_test, is_scaled=is_scaled)
+        metrics = evaluate_model(y_test, y_pred)
+
+        logger.info(
+            f"[TASK-ML-02 Đánh Giá Mô Hình] R2={metrics['r2']:.4f}, MAPE={metrics['mape']:.2f}%, "
+            f"MAE={metrics['mae']:.2f} kg, RMSE={metrics['rmse']:.2f} kg"
+        )
+
+        if assert_acceptance:
+            validate_scientific_acceptance(metrics)
+
+        return metrics
+
+
+# ==============================================================================
+# TASK-ML-02: Đánh Giá Độ Chính Xác & Cam Kết Chuẩn Khoa Học
+# ==============================================================================
+
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+
+def evaluate_model(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
+    """
+    Tính toán 4 chỉ số đo lường hiệu năng của mô hình hồi quy:
+    1. R2 (Hệ số xác định)
+    2. MAPE (Mean Absolute Percentage Error - %)
+    3. MAE (Mean Absolute Error - kg)
+    4. RMSE (Root Mean Squared Error - kg)
+    """
+    y_true_arr = np.asarray(y_true, dtype=np.float64).flatten()
+    y_pred_arr = np.asarray(y_pred, dtype=np.float64).flatten()
+
+    r2 = float(r2_score(y_true_arr, y_pred_arr))
+    
+    # Tính MAPE an toàn (tránh chia cho 0)
+    denom = np.maximum(np.abs(y_true_arr), 1e-6)
+    mape = float(np.mean(np.abs((y_true_arr - y_pred_arr) / denom)) * 100.0)
+    
+    mae = float(mean_absolute_error(y_true_arr, y_pred_arr))
+    rmse = float(np.sqrt(mean_squared_error(y_true_arr, y_pred_arr)))
+
+    return {
+        "r2": round(r2, 4),
+        "mape": round(mape, 2),
+        "mae": round(mae, 2),
+        "rmse": round(rmse, 2),
+    }
+
+
+def validate_scientific_acceptance(
+    metrics: Dict[str, float],
+    min_r2: float = 0.78,
+    max_mape: float = 8.7,
+) -> bool:
+    """
+    Kiểm tra tiêu chuẩn khoa học khắt khe của dự án:
+    - R² >= 0.78
+    - MAPE <= 8.7%
+    
+    Ném lỗi ValueError nếu mô hình không thỏa mãn để ngăn chặn xuất mô hình kém chất lượng.
+    """
+    r2_val = metrics.get("r2", 0.0)
+    mape_val = metrics.get("mape", 100.0)
+
+    is_r2_ok = r2_val >= min_r2
+    is_mape_ok = mape_val <= max_mape
+
+    if not is_r2_ok or not is_mape_ok:
+        err_msg = (
+            f"[Scientific Validation Failed] Mô hình không đạt chuẩn khoa học bắt buộc! "
+            f"Kết quả hiện tại: R²={r2_val:.4f} (yêu cầu >= {min_r2}), MAPE={mape_val:.2f}% (yêu cầu <= {max_mape}%)."
+        )
+        logger.error(err_msg)
+        raise ValueError(err_msg)
+
+    logger.info(
+        f"[Scientific Validation Passed] Mô hình đạt chuẩn khoa học: R²={r2_val:.4f} >= {min_r2}, MAPE={mape_val:.2f}% <= {max_mape}%."
+    )
+    return True
+
+
+def train_and_validate_feeding_model(
+    df: Optional[pd.DataFrame] = None,
+    test_ratio: float = 0.20,
+    assert_acceptance: bool = True,
+    scaler_path: str = "trained_models/feeding_scaler.joblib",
+) -> Tuple[XGBoostFeedingTrainer, Dict[str, float]]:
+    """
+    Quy trình tích hợp hoàn chỉnh:
+    1. Chuẩn bị dữ liệu và phân chia Time-Blocked Split (chống rò rỉ dữ liệu).
+    2. Huấn luyện mô hình XGBoost với 600 estimators, lr=0.05, max_depth=6.
+    3. Đánh giá kiểm định trên tập kiểm thử độc lập (R2 >= 0.78, MAPE <= 8.7%).
+    """
+    from app.data.generate_synthetic_data import generate_synthetic_feeding_dataset
+
+    if df is None:
+        logger.info("Chưa có DataFrame đầu vào, tự động sinh bộ dữ liệu thực nghiệm mẫu 10 ao x 90 ngày...")
+        df = generate_synthetic_feeding_dataset(num_ponds=10, cycle_days=90, random_seed=42)
+
+    pipeline = TimeSeriesDataPipeline(scaler_path=scaler_path)
+    X_train_s, y_train, X_test_s, y_test, scaler = pipeline.prepare_time_blocked_split(
+        df, test_ratio=test_ratio, save_scaler=True
+    )
+
+    trainer = XGBoostFeedingTrainer(scaler_path=scaler_path)
+    trainer.train(X_train_s, y_train, X_val=X_test_s, y_val=y_test)
+
+    metrics = trainer.evaluate(X_test_s, y_test, is_scaled=True, assert_acceptance=assert_acceptance)
+    return trainer, metrics

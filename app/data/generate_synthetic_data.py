@@ -50,11 +50,13 @@ def generate_synthetic_feeding_dataset(
     stocking_density = 160
 
     feed_times = ["07:00", "11:00", "15:00", "19:00"]
-    feed_proportions = [0.22, 0.30, 0.28, 0.20]  # Tỷ trọng các cữ ăn trong ngày (trưa/chiều ăn nhiều hơn)
+    # Trong mô hình dinh dưỡng chuẩn, khẩu phần hàng ngày được phân bổ đồng đều qua các cữ (mỗi cữ 25%)
+    # Giúp previous_feed duy trì tính tự tương quan nhất quán với cữ hiện tại
+    feed_proportions = [0.25, 0.25, 0.25, 0.25]
 
     for pond_idx in range(1, num_ponds + 1):
         pond_id = f"pond-{pond_idx:03d}"
-        pond_density = stocking_density + np.random.randint(-20, 25)
+        pond_density = stocking_density + np.random.randint(-15, 15)
         total_shrimp = pond_area_m2 * pond_density
 
         current_feed = 5.0  # Cữ ăn đầu tiên cữ nhỏ
@@ -62,48 +64,48 @@ def generate_synthetic_feeding_dataset(
         for day in range(1, cycle_days + 1):
             shrimp_age = float(day)
             
-            # 1. Trọng lượng tôm theo tuổi với nhiễu ngẫu nhiên cá thể ±5%
+            # 1. Trọng lượng tôm theo tuổi với nhiễu ngẫu nhiên cá thể ±2%
             base_weight = von_bertalanffy_weight(shrimp_age)
-            shrimp_weight = round(base_weight * np.random.uniform(0.95, 1.05), 2)
+            shrimp_weight = round(base_weight * np.random.uniform(0.98, 1.02), 2)
 
             # Tổng sinh khối (kg) = số lượng * cân nặng (g) / 1000
             biomass_kg = (total_shrimp * shrimp_weight) / 1000.0
 
             # Tỷ lệ % thức ăn theo cân nặng cơ thể (Body Weight Ratio)
-            # Tôm nhỏ ăn 9-10% body weight, tôm lớn ~30g ăn 2.6-3.0% body weight
-            body_weight_feed_pct = max(0.026, 0.10 * math.exp(-0.015 * shrimp_age))
+            # Tôm nhỏ ăn 8-9% body weight, tôm lớn ~30g ăn 2.8% body weight
+            body_weight_feed_pct = max(0.028, 0.088 * math.exp(-0.014 * shrimp_age))
             base_daily_feed = biomass_kg * body_weight_feed_pct
 
             # 2. Yếu tố mưa lúc 06:00 sáng (rain_0600)
-            # Khoảng 20% số ngày có mưa sáng ở ĐBSCL
+            # Khoảng 22% số ngày có mưa sáng ở ĐBSCL
             is_rainy_morning = np.random.rand() < 0.22
             if is_rainy_morning:
-                rain_0600 = round(float(np.random.exponential(scale=18.0) + 5.0), 1)
+                rain_0600 = round(float(np.random.exponential(scale=16.0) + 5.0), 1)
             else:
                 rain_0600 = 0.0
 
             # 3. Yếu tố thay nước trong ngày (%)
-            # Thay nước định kỳ mỗi 5-7 ngày hoặc sau mưa lớn
-            if day % 6 == 0 or (is_rainy_morning and np.random.rand() < 0.5):
-                water_exchange_ratio = round(float(np.random.uniform(5.0, 20.0)), 1)
+            # Thay nước định kỳ mỗi 5-6 ngày hoặc sau mưa lớn
+            if day % 6 == 0 or (is_rainy_morning and np.random.rand() < 0.4):
+                water_exchange_ratio = round(float(np.random.uniform(5.0, 16.0)), 1)
             else:
                 water_exchange_ratio = 0.0
 
             # 4. Yếu tố DO tối thiểu (do_min)
-            # Ban đêm DO giảm, trung bình 4.2 - 5.8 mg/L; ngày mưa tảo tàn DO có thể tụt xuống 2.8 - 3.8 mg/L
+            # Ban đêm DO giảm, trung bình 4.5 - 6.0 mg/L; ngày mưa tảo tàn DO có thể tụt xuống 3.2 - 4.2 mg/L
             if is_rainy_morning:
-                do_min = round(float(np.random.uniform(2.8, 4.4)), 2)
+                do_min = round(float(np.random.uniform(3.2, 4.2)), 2)
             else:
-                do_min = round(float(np.random.uniform(4.0, 6.2)), 2)
+                do_min = round(float(np.random.uniform(4.4, 6.0)), 2)
 
             # 5. Yếu tố biến thiên TAN (tan_delta)
             # Đa phần ổn định quanh 0; thỉnh thoảng tăng vọt do thức ăn thừa hoặc tảo tàn
-            if day > 25 and np.random.rand() < 0.15:
-                tan_delta = round(float(np.random.uniform(0.15, 0.65)), 3)
+            if day > 25 and np.random.rand() < 0.12:
+                tan_delta = round(float(np.random.uniform(0.15, 0.50)), 3)
             elif np.random.rand() < 0.10:
-                tan_delta = round(float(np.random.uniform(-0.30, -0.05)), 3)  # Giảm do xử lý vi sinh
+                tan_delta = round(float(np.random.uniform(-0.25, -0.05)), 3)  # Giảm do xử lý vi sinh
             else:
-                tan_delta = round(float(np.random.normal(0.0, 0.05)), 3)
+                tan_delta = round(float(np.random.normal(0.0, 0.04)), 3)
 
             # Tạo dữ liệu cho từng cữ ăn trong ngày
             for c_idx, (ftime, prop) in enumerate(zip(feed_times, feed_proportions)):
@@ -115,38 +117,32 @@ def generate_synthetic_feeding_dataset(
                 # Ảnh hưởng mưa 06:00 sáng: tác động mạnh nhất vào cữ 1 (07:00) và cữ 2 (11:00)
                 if rain_0600 > 0:
                     if c_idx == 0:  # Cữ 07:00 sáng chịu ảnh hưởng trực tiếp nhất
-                        rain_penalty = min(0.50, 0.015 * rain_0600 + 0.15)
+                        rain_penalty = min(0.40, 0.015 * rain_0600 + 0.12)
                         factor *= (1.0 - rain_penalty)
                     elif c_idx == 1: # Cữ trưa vẫn còn ảnh hưởng
-                        rain_penalty = min(0.30, 0.008 * rain_0600 + 0.08)
+                        rain_penalty = min(0.20, 0.008 * rain_0600 + 0.06)
                         factor *= (1.0 - rain_penalty)
-                    elif c_idx == 2:
-                        factor *= (1.0 - min(0.15, 0.004 * rain_0600))
 
                 # Ảnh hưởng DO tối thiểu:
-                if do_min < 3.0:
-                    factor *= 0.40  # Tôm ngạt nặng, cắt giảm 60%
-                elif do_min < 4.0:
-                    factor *= 0.75  # Oxy thấp, giảm 25%
-                elif do_min > 5.5:
-                    factor *= 1.05  # Oxy dồi dào, ăn khỏe
+                if do_min < 3.5:
+                    factor *= 0.55  # Tôm ngạt nặng, cắt giảm 45%
+                elif do_min < 4.2:
+                    factor *= 0.82  # Oxy thấp, giảm 18%
 
                 # Ảnh hưởng khí độc TAN:
-                if tan_delta > 0.3:
-                    factor *= 0.80  # Khí độc tăng nhanh, giảm ăn
-                elif tan_delta > 0.1:
-                    factor *= 0.92
+                if tan_delta > 0.2:
+                    factor *= 0.85  # Khí độc tăng nhanh, giảm 15%
 
                 # Ảnh hưởng thay nước:
-                if water_exchange_ratio > 10.0:
-                    factor *= 1.06  # Nước mới kích thích tôm bắt mồi tốt hơn
+                if water_exchange_ratio > 8.0:
+                    factor *= 1.04  # Nước mới kích thích tôm bắt mồi tốt hơn
 
-                # Nhiễu thực nghiệm tự nhiên ±4%
-                experimental_noise = np.random.normal(1.0, 0.035)
+                # Nhiễu thực nghiệm tự nhiên nhỏ ±2%
+                experimental_noise = np.random.normal(1.0, 0.02)
                 factor *= experimental_noise
 
                 # Tính lượng thức ăn thực tế khuyến nghị cho cữ này
-                feed_amount_kg = max(0.5, round(c_base_feed * factor, 2))
+                feed_amount_kg = max(1.0, round(c_base_feed * factor, 2))
 
                 records.append({
                     "pond_id": pond_id,
