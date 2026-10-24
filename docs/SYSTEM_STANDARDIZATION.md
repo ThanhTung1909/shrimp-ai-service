@@ -216,6 +216,57 @@ Mô hình dự báo trước nồng độ oxy ở từng mốc giờ (00:00, 02:
 
 ---
 
+### 3.4. Động Cơ Đánh Giá & Phân Tích Chất Lượng Nước Đa Thông Số Nuôi Tôm (Aquaculture Water Quality Engine)
+
+Nhằm mở rộng việc giám sát từ chỉ tập trung vào Oxy hòa tan sang toàn diện hệ sinh thái ao nuôi, hệ thống tích hợp bộ động cơ phân tích đa thông số dựa 100% trên các công trình nghiên cứu khoa học thực nghiệm đã công bố tại Việt Nam:
+- **Đỗ Doãn Dung et al. (2025)**: *Tạp chí KH ĐH Mở Hà Nội*, DOI: 10.59266/houjs.2025.844. (Minh Phú - Lộc An)
+- **Nguyễn Hữu Nghĩa et al. (2022)**: *Tạp chí KH&CN Việt Nam*, 64(5), tr. 58-64, DOI: 10.31276/VJST.64(5).58-64. (RIA1)
+- **Ngô Thụy Diễm Trang et al. (2022)**: *Tạp chí Khoa học ĐH Cần Thơ*, Tập 58, Số 1B, tr. 213-225, DOI: 10.22144/ctu.jvn.2022.024.
+- **QCVN 02-19:2014/BNNPTNT**: Quy chuẩn kỹ thuật Quốc gia về cơ sở nuôi tôm nước lợ.
+
+#### A. Bảng Chuẩn Hóa 10 Chỉ Tiêu Lý Hóa Sinh & Ngưỡng Cảnh Báo Khoa Học:
+
+| STT | Chỉ Tiêu Quan Trắc | Đơn Vị | Tối Ưu (Optimal) | Cảnh Báo (Warning) | Nguy Cấp (Danger) | Căn Cứ Khoa Học Trích Dẫn Trực Tiếp |
+| :---: | :--- | :---: | :---: | :---: | :---: | :--- |
+| **1** | **Oxy hòa tan ($DO$)** | mg/L | $5.0 - 8.0$ | $3.5 - 4.9$ | $< 3.5$ hoặc $> 20.0$ | QCVN 02-19:2014 ($DO \ge 3.5$); Boyd & Fast (1992) & Weitkamp (1980) ($DO > 20$ chết tôm do bọt khí). |
+| **2** | **Độ $pH$** | - | $7.5 - 8.5$ | $6.5 - 7.4$ hoặc $8.6 - 9.0$ | $< 6.5$ hoặc $> 9.0$ | QCVN 02-19:2014 ($7.0 - 9.0$); Ngô Thụy Diễm Trang et al. (2022); Chamberlain (1988). |
+| **3** | **Biến thiên ngày/đêm $\Delta pH$** | - | $\le 0.5$ | $0.6 - 0.9$ | $> 1.0$ | Ngô Thụy Diễm Trang et al. (2022); tảo quang hợp mạnh trưa nắng làm kiềm tăng vọt. |
+| **4** | **Nhiệt độ nước ($T$)** | $^\circ\text{C}$ | $28.0 - 32.0$ | $24.0 - 27.9$ | $< 24.0$ hoặc $> 33.5$ | QCVN 02-19:2014 ($18 - 33^\circ\text{C}$); Ngô Thụy Diễm Trang (2022) ($28 - 32.3^\circ\text{C}$ tối ưu). |
+| **5** | **Biến thiên nhiệt độ sau mưa ($\Delta T_{rain}$)** | $^\circ\text{C}$ | $\Delta T > -1.0$ | $[-2.9, -1.0]$ | $\mathbf{\le -3.0 \text{ đến } -5.0}$ | Đỗ Doãn Dung et al. (2025): Mưa làm giảm nhiệt độ ao từ $3-5^\circ\text{C}$, sức ăn tôm giảm ít nhất $30\%$. |
+| **6** | **Độ mặn ($Salinity$)** | ppt | $10.0 - 25.0$ | $5.0 - 9.9$ | $< 3.0$ (hoặc $< 5.0$) | Kungvankij (1986); Zhang et al. (2009): Độ mặn $5\text{ ppt}$ tỷ lệ sống giảm còn $12.5\%$ sau 96h. |
+| **7** | **Độ kiềm ($Alkalinity$)** | $\text{mg CaCO}_3\text{/L}$ | $100 - 160$ | $80 - 99$ hoặc $161 - 200$ | $< 60$ hoặc $> 220$ | QCVN 02-19:2014 ($60 - 180$); Mỹ (2009) ($> 80$); Dùng Dolomite, $CaCO_3$ đệm pH. |
+| **8** | **Amoniac độc tính ($NH_3$)** | mg/L | $< 0.01$ | $0.02 - 0.05$ | $\mathbf{> 0.05}$ (cực độc $> 0.1$) | Albert (1973); Emerson et al. (1975); Nguyễn Hữu Nghĩa et al. (2022); Fregoso (2017). |
+| **9** | **Nitrite ($NO_2^--N$)** *(Động theo độ mặn)* | mg/L | $< 1.0$ | Phân tầng theo Lin & Chen (2003) | Vượt ngưỡng Samocha (2019) | Lin & Chen (2003): Ngưỡng độc $6.1$ (ở $15\text{ ppt}$), $15.2$ ($25\text{ ppt}$); Valencia-Castañeda (2019). |
+| **10** | **Thế oxy hóa khử ($ORP$)** | mV | $180 - 250$ | $150 - 179$ hoặc $251 - 350$ | $\mathbf{< 150}$ (yếm khí sinh $H_2S$) | Nguyễn Hữu Nghĩa et al. (2022): $150-250\text{ mV}$ thúc đẩy nitrate hóa; $< 150\text{ mV}$ đáy ao suy thoái. |
+
+#### B. Mô Hình Tính Amoniac Độc Tính ($NH_3$) (Albert 1973, Emerson et al. 1975):
+
+$$pK_a = 0.09018 + \frac{2729.92}{273.15 + T_{^\circ\text{C}}} + (0.1552 - 0.000314 \cdot T) \cdot (0.0199 \cdot Salinity)$$
+
+$$f_{NH_3} = \frac{1}{10^{(pK_a - pH)} + 1} \implies [NH_3\text{-N}] = [TAN] \cdot f_{NH_3} \quad (\text{mg/L})$$
+
+#### C. Chỉ Số Chất Lượng Nước Nuôi Tôm Toàn Diện ($WQI_{shrimp} \in [0, 100]$):
+
+$$WQI = \sum_{i=1}^{n} w_i \cdot q_i$$
+
+Trọng số gia quyền khoa học:
+- $w_{DO} = 0.25$ (Yếu tố sinh mạng tức thời - Nguyễn Hữu Nghĩa et al. 2022)
+- $w_{NH_3} = 0.20$ (Khí độc thần kinh & mang - Albert 1973, Emerson 1975, Fregoso 2017)
+- $w_{NO_2} = 0.15$ (Khí độc máu theo độ mặn - Lin & Chen 2003, Samocha 2019)
+- $w_{pH} = 0.15$ (Đệm kiềm & stress môi trường - QCVN 02-19, Ngô Thụy Diễm Trang 2022)
+- $w_{Temp} = 0.10$ (Chuyển hóa & sốc nhiệt - Đỗ Doãn Dung et al. 2025)
+- $w_{Salinity} = 0.08$ (Điều hòa áp suất thẩm thấu - Kungvankij 1986, Zhang 2009)
+- $w_{ORP} = 0.07$ (Sức khỏe nền đáy ao - Nguyễn Hữu Nghĩa et al. 2022)
+
+Phân loại WQI:
+- $85 - 100$: **EXCELLENT** (Môi trường hoàn hảo, tôm phát triển tối đa)
+- $70 - 84$: **GOOD** (Tốt, tôm sinh trưởng khỏe mạnh)
+- $50 - 69$: **ACCEPTABLE** (Trung bình, cần theo dõi sát)
+- $30 - 49$: **WARNING** (Kém, tôm stress sinh lý, giảm ăn)
+- $0 - 29$: **DANGER** (Nguy cấp, đe dọa trực tiếp mạng sống đàn tôm)
+
+---
+
 ## 4. CHUẨN HOÁ GIAO DIỆN LẬP TRÌNH API (REST CONTRACTS)
 
 ### 4.1. Cấu hình Vòng đời Ứng dụng & Lifespan Preloading

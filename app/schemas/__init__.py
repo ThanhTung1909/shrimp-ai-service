@@ -10,6 +10,8 @@ from app.schemas.feeding import (
     FeedingRiskLevel,
 )
 from app.schemas.prediction import (
+    ComprehensiveWaterQualityRequest,
+    ComprehensiveWaterQualityResponse,
     NestJSPredictRequest,
     NestJSPredictResponse,
     NestJSRiskLevel,
@@ -31,6 +33,8 @@ __all__ = [
     "NestJSPredictRequest",
     "NestJSPredictResponse",
     "NestJSRiskLevel",
+    "ComprehensiveWaterQualityRequest",
+    "ComprehensiveWaterQualityResponse",
     "DOSaturationRequest",
     "DOSaturationResponse",
     "NighttimeDODepletionRequest",

@@ -406,3 +406,7 @@ def load_trained_feeding_model(
     logger.info("[load_trained_feeding_model] Sẵn sàng phục vụ suy luận.")
     return trainer
 
+
+# Alias định danh thuận tiện
+FeedingModelTrainer = XGBoostFeedingTrainer
+
