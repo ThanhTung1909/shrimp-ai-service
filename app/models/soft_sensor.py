@@ -78,6 +78,10 @@ def calculate_do_saturation(
     return round(float(do_sat), 3)
 
 
+# Alias tương thích
+benson_krause_do_saturation = calculate_do_saturation
+
+
 def analyze_do_saturation_status(
     temperature: float,
     salinity: float,
