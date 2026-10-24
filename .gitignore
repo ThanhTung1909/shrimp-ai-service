@@ -26,7 +26,8 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# Virtual environments
+# Virtual environments & local packages
+packages/
 venv/
 .venv/
 env/
