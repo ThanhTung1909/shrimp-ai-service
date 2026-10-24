@@ -6,7 +6,9 @@ Tuân thủ tuyệt đối bộ tham số thực nghiệm:
 - 7 biến thực nghiệm bắt buộc (Feature Integrity Rule)
 """
 
+import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 import joblib
@@ -46,12 +48,14 @@ class XGBoostFeedingTrainer:
         target_col: str = "feed_amount_kg",
         model_path: str = "trained_models/xgboost_feeding_model.joblib",
         scaler_path: str = "trained_models/feeding_scaler.joblib",
+        metadata_path: str = "trained_models/model_metadata.json",
     ):
         self.params = params or DEFAULT_XGBOOST_PARAMS.copy()
         self.feature_cols = list(feature_cols)
         self.target_col = target_col
         self.model_path = Path(model_path)
         self.scaler_path = Path(scaler_path)
+        self.metadata_path = Path(metadata_path)
 
         self.model: Optional[XGBRegressor] = None
         self.pipeline = TimeSeriesDataPipeline(
@@ -192,6 +196,86 @@ class XGBoostFeedingTrainer:
 
         return metrics
 
+    def save_model(
+        self,
+        model_path: Optional[Union[str, Path]] = None,
+        metadata_path: Optional[Union[str, Path]] = None,
+        metrics: Optional[Dict[str, float]] = None,
+    ) -> Tuple[Path, Path]:
+        """
+        Đóng gói và xuất file trọng số mô hình (.joblib) và metadata (.json).
+        
+        Args:
+            model_path: Đường dẫn file lưu trọng số (.joblib). Mặc định dùng self.model_path.
+            metadata_path: Đường dẫn file lưu metadata (.json). Mặc định dùng self.metadata_path.
+            metrics: Từ điển các chỉ số đánh giá (R2, MAPE, MAE, RMSE).
+            
+        Returns:
+            Tuple[Path, Path]: Đường dẫn file model và file metadata đã ghi.
+        """
+        if self.model is None:
+            raise ValueError("Không thể lưu mô hình chưa được huấn luyện hoặc khởi tạo.")
+
+        m_path = Path(model_path) if model_path else self.model_path
+        meta_path = Path(metadata_path) if metadata_path else self.metadata_path
+
+        m_path.parent.mkdir(parents=True, exist_ok=True)
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 1. Lưu trọng số mô hình .joblib
+        joblib.dump(self.model, m_path)
+        logger.info(f"[TASK-ML-04] Đã lưu trọng số mô hình XGBoost vào: {m_path}")
+
+        # 2. Xây dựng và lưu model_metadata.json
+        metadata = {
+            "model_name": "xgboost_feeding_model",
+            "version": "1.0.0",
+            "model_type": "XGBRegressor",
+            "trained_at": datetime.now(timezone.utc).isoformat(),
+            "feature_integrity": {
+                "count": len(self.feature_cols),
+                "features": self.feature_cols,
+                "target": self.target_col,
+            },
+            "hyperparameters": self.get_hyperparameters(),
+            "metrics": metrics or {},
+            "feature_importances": self.get_feature_importances(),
+            "scaler_path": str(self.scaler_path),
+            "scientific_acceptance": {
+                "min_r2_threshold": 0.78,
+                "max_mape_threshold": 8.7,
+                "passed": bool(
+                    metrics
+                    and metrics.get("r2", 0) >= 0.78
+                    and metrics.get("mape", 100) <= 8.7
+                ) if metrics else False,
+            },
+        }
+
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2, ensure_ascii=False)
+        logger.info(f"[TASK-ML-04] Đã xuất file metadata vào: {meta_path}")
+
+        return m_path, meta_path
+
+    def load_model(self, model_path: Optional[Union[str, Path]] = None) -> XGBRegressor:
+        """
+        Nạp trọng số mô hình từ file .joblib đã lưu vào bộ nhớ.
+        
+        Args:
+            model_path: Đường dẫn file trọng số. Mặc định dùng self.model_path.
+            
+        Returns:
+            XGBRegressor: Thực thể mô hình sẵn sàng suy luận.
+        """
+        m_path = Path(model_path) if model_path else self.model_path
+        if not m_path.exists():
+            raise FileNotFoundError(f"Không tìm thấy file trọng số mô hình tại: {m_path}")
+
+        self.model = joblib.load(m_path)
+        logger.info(f"[TASK-ML-04] Nạp mô hình XGBoost thành công từ: {m_path}")
+        return self.model
+
 
 # ==============================================================================
 # TASK-ML-02: Đánh Giá Độ Chính Xác & Cam Kết Chuẩn Khoa Học
@@ -264,13 +348,17 @@ def train_and_validate_feeding_model(
     df: Optional[pd.DataFrame] = None,
     test_ratio: float = 0.20,
     assert_acceptance: bool = True,
+    save_artifacts: bool = True,
+    model_path: str = "trained_models/xgboost_feeding_model.joblib",
     scaler_path: str = "trained_models/feeding_scaler.joblib",
+    metadata_path: str = "trained_models/model_metadata.json",
 ) -> Tuple[XGBoostFeedingTrainer, Dict[str, float]]:
     """
     Quy trình tích hợp hoàn chỉnh:
     1. Chuẩn bị dữ liệu và phân chia Time-Blocked Split (chống rò rỉ dữ liệu).
     2. Huấn luyện mô hình XGBoost với 600 estimators, lr=0.05, max_depth=6.
     3. Đánh giá kiểm định trên tập kiểm thử độc lập (R2 >= 0.78, MAPE <= 8.7%).
+    4. Xuất trọng số .joblib và model_metadata.json nếu save_artifacts=True.
     """
     from app.data.generate_synthetic_data import generate_synthetic_feeding_dataset
 
@@ -283,8 +371,38 @@ def train_and_validate_feeding_model(
         df, test_ratio=test_ratio, save_scaler=True
     )
 
-    trainer = XGBoostFeedingTrainer(scaler_path=scaler_path)
+    trainer = XGBoostFeedingTrainer(
+        model_path=model_path,
+        scaler_path=scaler_path,
+        metadata_path=metadata_path,
+    )
     trainer.train(X_train_s, y_train, X_val=X_test_s, y_val=y_test)
 
     metrics = trainer.evaluate(X_test_s, y_test, is_scaled=True, assert_acceptance=assert_acceptance)
+
+    if save_artifacts:
+        trainer.save_model(metrics=metrics)
+
     return trainer, metrics
+
+
+def load_trained_feeding_model(
+    model_path: str = "trained_models/xgboost_feeding_model.joblib",
+    scaler_path: str = "trained_models/feeding_scaler.joblib",
+    metadata_path: str = "trained_models/model_metadata.json",
+) -> XGBoostFeedingTrainer:
+    """
+    Tiện ích nạp sẵn mô hình và scaler vào RAM phục vụ API inference (FastAPI lifespan).
+    Đảm bảo thời gian phản hồi < 500ms theo Inference Latency Rule.
+    """
+    trainer = XGBoostFeedingTrainer(
+        model_path=model_path,
+        scaler_path=scaler_path,
+        metadata_path=metadata_path,
+    )
+    trainer.load_model()
+    # Tải trước scaler để sẵn sàng dự báo
+    trainer.pipeline.load_scaler()
+    logger.info("[load_trained_feeding_model] Sẵn sàng phục vụ suy luận.")
+    return trainer
+
