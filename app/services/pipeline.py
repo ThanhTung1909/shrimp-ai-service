@@ -14,10 +14,6 @@ from app.database import SessionLocal, get_engine
 
 logger = logging.getLogger("ai_service.pipeline")
 
-# ==============================================================================
-# TASK-DP-01: Truy Vấn Chuỗi Thời Gian Telemetry Theo Time-Bucket & Pond ID
-# ==============================================================================
-
 SQL_TELEMETRY_TIME_BUCKET = """
 SELECT 
     time_bucket(:bucket_interval, td.recorded_at) AS bucket_time,
@@ -145,10 +141,6 @@ def fetch_latest_pond_telemetry(
         if close_session_after:
             session.close()
 
-
-# ==============================================================================
-# TASK-DP-02: Làm Sạch Dữ Liệu & Nội Suy Tuyến Tính (Linear Interpolation)
-# ==============================================================================
 
 BIOLOGICAL_LIMITS = {
     "temperature": (15.0, 42.0),
@@ -297,3 +289,163 @@ def clean_and_interpolate_telemetry(
     )
 
     return df_interpolated
+
+
+# ==============================================================================
+# TASK-DP-03: Trích Xuất 7 Đặc Trưng Thực Nghiệm (Feature Integrity Rule)
+# ==============================================================================
+
+REQUIRED_FEEDING_FEATURES = (
+    "shrimp_age",
+    "shrimp_weight",
+    "do_min",
+    "tan_delta",
+    "rain_0600",
+    "previous_feed",
+    "water_exchange_ratio",
+)
+
+SQL_RECENT_TAN_LOGS = """
+SELECT nh3_value, tested_at
+FROM manual_test_log
+WHERE pond_id = :pond_id
+ORDER BY tested_at DESC
+LIMIT 2;
+"""
+
+
+def fetch_tan_delta_from_db(
+    pond_id: str,
+    session: Optional[Session] = None,
+) -> float:
+    """
+    Truy vấn 2 lần đo gần nhất từ manual_test_log để tính độ biến thiên TAN (tan_delta).
+    tan_delta = tan_recent - tan_previous (mg/L).
+    """
+    close_session_after = False
+    if session is None:
+        session = SessionLocal()
+        close_session_after = True
+
+    try:
+        result = session.execute(text(SQL_RECENT_TAN_LOGS), {"pond_id": pond_id})
+        rows = result.fetchall()
+        if len(rows) >= 2:
+            tan_recent = float(rows[0][0])
+            tan_prev = float(rows[1][0])
+            return round(tan_recent - tan_prev, 4)
+        return 0.0
+    except Exception as e:
+        logger.warning(f"[fetch_tan_delta_from_db Warning] Không thể lấy tan_delta cho ao {pond_id}: {e}")
+        return 0.0
+    finally:
+        if close_session_after:
+            session.close()
+
+
+def extract_do_min_from_telemetry(
+    df_telemetry: pd.DataFrame,
+    window_hours: int = 12,
+    do_column: str = "avg_dissolved_oxygen",
+) -> float:
+    """
+    Trích xuất giá trị DO tối thiểu (do_min) trong cửa sổ window_hours gần nhất.
+    """
+    if df_telemetry.empty:
+        return 5.0  # Mặc định an toàn nếu không có dữ liệu
+
+    col = do_column if do_column in df_telemetry.columns else "dissolved_oxygen"
+    if col not in df_telemetry.columns:
+        return 5.0
+
+    series = df_telemetry[col].dropna()
+    if series.empty:
+        return 5.0
+
+    # Lấy cửa sổ thời gian gần nhất
+    if isinstance(df_telemetry.index, pd.DatetimeIndex):
+        latest_time = df_telemetry.index.max()
+        cutoff_time = latest_time - pd.Timedelta(hours=window_hours)
+        window_series = series[series.index >= cutoff_time]
+        if not window_series.empty:
+            return float(window_series.min())
+
+    # Fallback lấy N mẫu gần nhất
+    steps = window_hours * 4
+    return float(series.tail(steps).min())
+
+
+def build_feeding_feature_dict(
+    shrimp_age: float,
+    shrimp_weight: float,
+    do_min: float,
+    tan_delta: float,
+    rain_0600: float,
+    previous_feed: float,
+    water_exchange_ratio: float,
+) -> dict:
+    """
+    Đóng gói và kiểm tra tính toàn vẹn của 7 biến thực nghiệm bắt buộc.
+    
+    Quy tắc Feature Integrity: Tuyệt đối không lược bỏ biến nào trong 7 biến thực nghiệm.
+    """
+    features = {
+        "shrimp_age": float(shrimp_age),
+        "shrimp_weight": float(shrimp_weight),
+        "do_min": float(do_min),
+        "tan_delta": float(tan_delta),
+        "rain_0600": float(rain_0600),
+        "previous_feed": float(previous_feed),
+        "water_exchange_ratio": float(water_exchange_ratio),
+    }
+
+    # Xác thực sinh học cơ bản
+    if features["shrimp_age"] < 1:
+        raise ValueError("shrimp_age phải >= 1 ngày.")
+    if features["shrimp_weight"] <= 0:
+        raise ValueError("shrimp_weight phải > 0 g/con.")
+    if features["rain_0600"] < 0:
+        raise ValueError("rain_0600 không được âm.")
+    if features["previous_feed"] < 0:
+        raise ValueError("previous_feed không được âm.")
+    if not (0 <= features["water_exchange_ratio"] <= 100):
+        raise ValueError("water_exchange_ratio phải nằm trong khoảng [0, 100]%.")
+
+    return features
+
+
+def extract_features_from_pond_state(
+    pond_id: str,
+    shrimp_age: float,
+    shrimp_weight: float,
+    rain_0600: float,
+    previous_feed: float,
+    water_exchange_ratio: float,
+    df_telemetry: Optional[pd.DataFrame] = None,
+    tan_delta: Optional[float] = None,
+    session: Optional[Session] = None,
+) -> dict:
+    """
+    Tổng hợp đầy đủ 7 biến thực nghiệm từ dữ liệu ao, cảm biến telemetry và nhật ký đo kiểm.
+    """
+    # 1. Tính do_min từ telemetry (nếu được cung cấp)
+    if df_telemetry is not None and not df_telemetry.empty:
+        computed_do_min = extract_do_min_from_telemetry(df_telemetry, window_hours=12)
+    else:
+        computed_do_min = 5.0
+
+    # 2. Tính tan_delta từ database nếu chưa truyền trực tiếp
+    if tan_delta is None:
+        computed_tan_delta = fetch_tan_delta_from_db(pond_id, session=session)
+    else:
+        computed_tan_delta = float(tan_delta)
+
+    return build_feeding_feature_dict(
+        shrimp_age=shrimp_age,
+        shrimp_weight=shrimp_weight,
+        do_min=computed_do_min,
+        tan_delta=computed_tan_delta,
+        rain_0600=rain_0600,
+        previous_feed=previous_feed,
+        water_exchange_ratio=water_exchange_ratio,
+    )
