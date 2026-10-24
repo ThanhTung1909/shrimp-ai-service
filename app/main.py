@@ -221,3 +221,18 @@ async def health_check():
         "database": db_status,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# ==============================================================================
+# Include Routers (API Endpoints)
+# ==============================================================================
+
+from app.api.v1.router import api_v1_router
+from app.api.v1.predictions import router as predictions_direct_router
+
+# Đăng ký API v1 chuẩn: /api/v1/...
+app.include_router(api_v1_router, prefix="/api/v1")
+
+# Đăng ký trực tiếp cho NestJS PredictionsService: /api/predict
+app.include_router(predictions_direct_router, prefix="/api")
+
