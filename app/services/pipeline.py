@@ -144,3 +144,156 @@ def fetch_latest_pond_telemetry(
     finally:
         if close_session_after:
             session.close()
+
+
+# ==============================================================================
+# TASK-DP-02: Làm Sạch Dữ Liệu & Nội Suy Tuyến Tính (Linear Interpolation)
+# ==============================================================================
+
+BIOLOGICAL_LIMITS = {
+    "temperature": (15.0, 42.0),
+    "avg_temperature": (15.0, 42.0),
+    "ph": (5.5, 10.0),
+    "avg_ph": (5.5, 10.0),
+    "salinity": (0.0, 45.0),
+    "avg_salinity": (0.0, 45.0),
+    "dissolved_oxygen": (0.0, 15.0),
+    "avg_dissolved_oxygen": (0.0, 15.0),
+    "min_dissolved_oxygen": (0.0, 15.0),
+    "max_dissolved_oxygen": (0.0, 15.0),
+    "turbidity": (0.0, 200.0),
+    "avg_turbidity": (0.0, 200.0),
+    "water_level": (0.0, 5.0),
+    "avg_water_level": (0.0, 5.0),
+}
+
+
+def filter_biological_outliers(
+    df: pd.DataFrame,
+    limits: Optional[dict] = None,
+    replace_with_nan: bool = True,
+) -> pd.DataFrame:
+    """
+    Phát hiện và lọc các giá trị đo cảm biến nằm ngoài biên sinh học an toàn ao tôm.
+    
+    Args:
+        df: DataFrame chứa chuỗi dữ liệu telemetry.
+        limits: Từ điển biên (min, max) cho từng metric. Mặc định dùng BIOLOGICAL_LIMITS.
+        replace_with_nan: Nếu True, chuyển outlier thành NaN để chuẩn bị cho bước nội suy.
+        
+    Returns:
+        DataFrame đã lọc nhiễu.
+    """
+    if df.empty:
+        return df.copy()
+
+    df_cleaned = df.copy()
+    thresholds = limits or BIOLOGICAL_LIMITS
+
+    outlier_counts = {}
+    for column, (min_val, max_val) in thresholds.items():
+        if column in df_cleaned.columns:
+            is_numeric = pd.to_numeric(df_cleaned[column], errors="coerce")
+            invalid_mask = (is_numeric < min_val) | (is_numeric > max_val)
+            count = int(invalid_mask.sum())
+            if count > 0:
+                outlier_counts[column] = count
+                if replace_with_nan:
+                    df_cleaned.loc[invalid_mask, column] = float("nan")
+                else:
+                    df_cleaned[column] = is_numeric.clip(lower=min_val, upper=max_val)
+
+    if outlier_counts:
+        logger.info(f"[filter_biological_outliers] Đã phát hiện và lọc ngoại lai: {outlier_counts}")
+
+    return df_cleaned
+
+
+def clean_and_interpolate_telemetry(
+    df: pd.DataFrame,
+    freq: str = "15min",
+    max_gap_hours: float = 2.0,
+    time_col: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Quy trình chuẩn hóa chuỗi thời gian telemetry:
+    1. Đảm bảo Index là DatetimeIndex chuẩn có bước nhảy freq đồng đều.
+    2. Lọc các giá trị ngoại lai sinh học thành NaN.
+    3. Nội suy tuyến tính (Linear Interpolation) cho các khoảng rớt mạng IoT (<= max_gap_hours).
+    4. Cắm cờ cảnh báo nếu khoảng khuyết vượt quá ngưỡng trôi dạt max_gap_hours.
+    
+    Args:
+        df: DataFrame đầu vào.
+        freq: Tần suất đồng bộ chuỗi thời gian (mặc định: '15min').
+        max_gap_hours: Giới hạn tối đa cho phép nội suy (mặc định: 2.0 giờ).
+        time_col: Tên cột thời gian nếu chưa set index.
+        
+    Returns:
+        pd.DataFrame sạch, đầy đủ chỉ số, có cờ theo dõi nội suy.
+    """
+    if df.empty:
+        return df.copy()
+
+    df_proc = df.copy()
+
+    # 1. Đảm bảo DatetimeIndex
+    if time_col and time_col in df_proc.columns:
+        df_proc[time_col] = pd.to_datetime(df_proc[time_col], utc=True)
+        df_proc.set_index(time_col, inplace=True)
+    elif not isinstance(df_proc.index, pd.DatetimeIndex):
+        try:
+            df_proc.index = pd.to_datetime(df_proc.index, utc=True)
+        except Exception as e:
+            logger.error(f"[clean_and_interpolate_telemetry] Index không thể chuyển thành DatetimeIndex: {e}")
+            raise ValueError(f"DataFrame index phải là DatetimeIndex: {e}")
+
+    df_proc.sort_index(inplace=True)
+
+    # 2. Lọc ngoại lai sinh học
+    df_proc = filter_biological_outliers(df_proc, replace_with_nan=True)
+
+    # 3. Đồng bộ lưới thời gian (Reindex/Resample đều đặn)
+    full_idx = pd.date_range(start=df_proc.index.min(), end=df_proc.index.max(), freq=freq)
+    df_reindexed = df_proc.reindex(full_idx)
+
+    # Giữ lại pond_id nếu có
+    if "pond_id" in df_proc.columns:
+        first_valid_pond = df_proc["pond_id"].dropna().iloc[0] if not df_proc["pond_id"].dropna().empty else None
+        if first_valid_pond:
+            df_reindexed["pond_id"] = df_reindexed["pond_id"].fillna(first_valid_pond)
+
+    # 4. Tính toán limit steps cho nội suy tuyến tính
+    # Với freq 15min -> 1 giờ = 4 bước -> 2 giờ = 8 bước
+    freq_delta = pd.Timedelta(freq)
+    steps_per_hour = pd.Timedelta(hours=1) / freq_delta
+    limit_steps = max(1, int(round(steps_per_hour * max_gap_hours)))
+
+    numeric_cols = df_reindexed.select_dtypes(include=["number"]).columns.tolist()
+
+    # Đánh dấu những điểm dữ liệu vốn bị khuyết
+    original_nan_mask = df_reindexed[numeric_cols].isna()
+
+    # 5. Nội suy tuyến tính với giới hạn limit_steps
+    df_interpolated = df_reindexed.copy()
+    df_interpolated[numeric_cols] = df_reindexed[numeric_cols].interpolate(
+        method="linear",
+        limit=limit_steps,
+        limit_direction="forward",
+    )
+
+    # 6. Đánh dấu cờ chất lượng dữ liệu
+    # is_interpolated: True tại các điểm được bù đắp dữ liệu bằng nội suy
+    interpolated_mask = original_nan_mask & (~df_interpolated[numeric_cols].isna())
+    df_interpolated["is_interpolated"] = interpolated_mask.any(axis=1)
+
+    # gap_exceeded_limit: True nếu sau khi nội suy mà vẫn còn NaN (khoảng mất tín hiệu > 2h)
+    remaining_nan = df_interpolated[numeric_cols].isna().any(axis=1)
+    df_interpolated["gap_exceeded_limit"] = remaining_nan
+
+    logger.info(
+        f"[clean_and_interpolate_telemetry] Tổng mẫu: {len(df_interpolated)}, "
+        f"Số điểm nội suy: {int(df_interpolated['is_interpolated'].sum())}, "
+        f"Số điểm vượt ngưỡng khuyết {max_gap_hours}h: {int(df_interpolated['gap_exceeded_limit'].sum())}"
+    )
+
+    return df_interpolated
