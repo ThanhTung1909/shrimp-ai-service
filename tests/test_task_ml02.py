@@ -63,6 +63,7 @@ def test_end_to_end_model_meets_scientific_standards(tmp_path):
         df=df,
         test_ratio=0.20,
         assert_acceptance=True,
+        save_artifacts=False,
         scaler_path=str(scaler_file),
     )
 
