@@ -155,7 +155,7 @@ def test_feeding_forecast_response_serialization():
 # ==============================================================================
 
 def test_nestjs_predict_request_camel_and_snake_case():
-    """Kiểm tra NestJSPredictRequest tiếp nhận cả camelCase từ NestJS và snake_case"""
+    """Kiểm tra NestJSPredictRequest tiếp nhận field aliases mà không tự điền telemetry."""
     # 1. Dạng camelCase từ NestJS Core Backend
     payload_camel = {
         "pondId": "pond-101",
@@ -167,19 +167,21 @@ def test_nestjs_predict_request_camel_and_snake_case():
     }
     req1 = NestJSPredictRequest(**payload_camel)
     assert req1.pond_id == "pond-101"
-    assert req1.current_do == 5.4
+    assert req1.dissolved_oxygen == 5.4
     assert req1.temperature == 29.5
 
-    # 2. Dạng snake_case với 'do'
+    # 2. Dạng snake_case tương ứng đầy đủ contract
     payload_snake = {
         "pond_id": "pond-102",
         "temperature": 30.0,
         "ph": 8.1,
-        "do": 4.6,
+        "dissolved_oxygen": 4.6,
+        "salinity": 15.0,
+        "turbidity": 25.0,
     }
     req2 = NestJSPredictRequest(**payload_snake)
     assert req2.pond_id == "pond-102"
-    assert req2.current_do == 4.6
+    assert req2.dissolved_oxygen == 4.6
 
 
 def test_nestjs_predict_response_structure():

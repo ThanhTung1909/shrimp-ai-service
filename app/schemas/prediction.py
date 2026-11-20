@@ -24,25 +24,24 @@ class NestJSRiskLevel(str, Enum):
 class NestJSPredictRequest(BaseModel):
     """
     Dữ liệu yêu cầu dự báo chất lượng nước từ Core Backend NestJS.
-    Chấp nhận cả camelCase và snake_case để tương thích linh hoạt.
+    Chấp nhận field aliases camelCase hoặc snake_case tương ứng.  Core phải gửi
+    adapter contract ai-develop-v1; không có giá trị telemetry mặc định.
     Hỗ trợ tiếp nhận các chỉ tiêu mở rộng (TAN, NO2, ORP, độ kiềm, biến thiên mưa).
     """
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     pond_id: Optional[str] = Field(default=None, alias="pondId", description="Mã định danh ao nuôi")
     temperature: float = Field(..., ge=0.0, le=50.0, description="Nhiệt độ nước (°C)")
     ph: float = Field(..., ge=0.0, le=14.0, description="Độ pH của nước ao")
-    salinity: float = Field(default=15.0, ge=0.0, le=50.0, description="Độ mặn (ppt)")
-    dissolved_oxygen: Optional[float] = Field(
-        default=None,
+    salinity: float = Field(..., ge=0.0, le=50.0, description="Độ mặn (ppt)")
+    dissolved_oxygen: float = Field(
+        ...,
         alias="dissolvedOxygen",
         ge=0.0,
         le=30.0,
         description="Nồng độ Oxy hòa tan hiện tại (mg/L)",
     )
-    # Hỗ trợ trường do ngắn gọn nếu gửi từ cảm biến
-    do: Optional[float] = Field(default=None, ge=0.0, le=30.0)
-    turbidity: float = Field(default=25.0, ge=0.0, le=500.0, description="Độ đục (NTU)")
+    turbidity: float = Field(..., ge=0.0, le=500.0, description="Độ đục (NTU)")
     
     # Các chỉ tiêu hóa lý sinh bổ sung theo nghiên cứu công bố (tùy chọn)
     tan: Optional[float] = Field(default=None, ge=0.0, le=20.0, description="Tổng Amoniac TAN (mg/L)")
@@ -52,16 +51,6 @@ class NestJSPredictRequest(BaseModel):
     delta_temp_rain: Optional[float] = Field(default=None, alias="deltaTempRain", description="Độ sụt nhiệt độ do mưa (°C)")
     delta_ph: Optional[float] = Field(default=None, alias="deltaPH", description="Biến thiên pH ngày/đêm")
     timestamp: Optional[str] = Field(default=None, description="Thời điểm ghi nhận telemetry")
-
-    @property
-    def current_do(self) -> float:
-        """Lấy giá trị Oxy hòa tan từ trường dissolved_oxygen hoặc do"""
-        if self.dissolved_oxygen is not None:
-            return float(self.dissolved_oxygen)
-        if self.do is not None:
-            return float(self.do)
-        return 5.0  # Mặc định an toàn nếu không truyền
-
 
 class NestJSPredictResponse(BaseModel):
     """
