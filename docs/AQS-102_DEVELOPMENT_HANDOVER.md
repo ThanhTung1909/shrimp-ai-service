@@ -15,13 +15,13 @@ The canonical `POST /api/v1/ai/water-quality/comprehensive-assessment` route is 
 The earlier `503 RISK_RULES_PENDING_APPROVAL` statement in historical AQS-102 records does not describe the current route revision. The relevant safety control remains at Core: the normal false approval flag makes no FastAPI request and persists `HEURISTIC_RULE` fallback. An independent loopback Uvicorn process was used to verify that real Core-to-FastAPI HTTP transport **2/2 PASS** without touching external services.
 
 **Date:** 2026-11-20
-**Working branch:** `feature/AQS-102_dual-compatibility-validator-route-prefix` (based on `origin/develop` at `e3363ee20169d54d558ede1b0c954466c10e5428`)
+**Published branch:** `feature/AQS-102_dual-compatibility-route-prefix` at `d0904933441e2712e4ad4ecf71f4a8651217c628` (based on `origin/develop` at `e3363ee20169d54d558ede1b0c954466c10e5428`)
 **Development acceptance:** `AQS-102_DEVELOPMENT_ACCEPTANCE_FULL`
 **Production AI/risk-rule approval:** unchanged — `BLOCKED / PENDING_APPROVAL`
 
 ## Scope and baseline evidence
 
-This handover records only the FastAPI compatibility and route-composition work in AQS-102.  No model, risk rule, approval setting, database, service process, or deployment was changed.
+This handover records only the FastAPI compatibility and route-composition work in AQS-102. It is published on the required target branch. No model, risk rule, approval setting, database, service process, or deployment was changed.
 
 The source contract on the actual `origin/develop` baseline used canonical input fields `temperature`, `ph`, and `dissolvedOxygen`. Before this change, a legacy payload using `currentTemp`, `currentPH`, and `currentDO` returned HTTP 422 because those required canonical values were absent. The assessment router was also mounted both directly at `/api` and through the `/api/v1` aggregate router, exposing the erroneous `/api/v1/v1/ai/water-quality/comprehensive-assessment` path.
 
