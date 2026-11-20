@@ -8,6 +8,7 @@
 - Direct loopback HTTP acceptance in `AQUASENSE_HTTP_TEST_MODE=true` passed: `/health` 200; `/api/predict` canonical, legacy and equal mixed inputs 200; conflict and invalid-string payloads 422; canonical comprehensive-assessment 200; doubled `/api/v1/v1/...` route 404. The temporary Uvicorn process was stopped after the check.
 - Current Core evidence: focused regression **79/79**, real Core-to-FastAPI transport **2/2**, build PASS, lint PASS with 19 existing warnings, and owned loopback/tmpfs PostgreSQL E2E **16/16** with fixture database/container/port cleanup.
 - Current Frontend evidence: production build PASS, lint PASS with **0 errors / 137 warnings**, and Playwright **15/15 PASS**. `test-results/.last-run.json` was intentionally kept local and not committed.
+- GitHub Actions was queried read-only for the three target SHAs; no matching workflow run was returned. This is recorded as **CI/CD: no run found**, not as a CI pass.
 
 All pushes were non-force and remote SHA equality was verified. No production service, model, risk rule, database, deployment, or production-inference approval changed. **`PRODUCTION_AI_BLOCKED_PENDING_APPROVAL` remains controlling.**
 
