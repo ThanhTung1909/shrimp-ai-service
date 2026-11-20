@@ -1,5 +1,16 @@
 # AQS-102 Development Handover
 
+## Three-repository audit, regression and publication verification — 2026-11-20
+
+**Result:** `AQUASENSE_THREE_REPOSITORIES_PUSH_VERIFIED`. The FastAPI source/routing baseline was already published on `feature/AQS-102_dual-compatibility-route-prefix` at `a9c1b44450964f9c95f40b70727b6434ac7b1861`; its source did not require another implementation commit. The separately published Core target remains `2f0d9f26b9b24890a316db3e41b43539dbf0b593`. Frontend `main` advanced from `957160f8a197dfc61ab90a8dead226a16619ca95` to `2313ca4255e33207fbb66503523f684ce543e14a` with `fix(aqs-101): harden pond prediction UX` (21 audited files, including its acceptance tests); it continues to call Core API endpoints rather than FastAPI directly.
+
+- FastAPI full regression was rerun with isolated `TEMP`/`TMP` and `--basetemp`: **105/105 PASS** (80 warnings; dependency deprecations and the pre-existing feeding scaler/XGBoost serialization-version warnings remain visible).
+- Direct loopback HTTP acceptance in `AQUASENSE_HTTP_TEST_MODE=true` passed: `/health` 200; `/api/predict` canonical, legacy and equal mixed inputs 200; conflict and invalid-string payloads 422; canonical comprehensive-assessment 200; doubled `/api/v1/v1/...` route 404. The temporary Uvicorn process was stopped after the check.
+- Current Core evidence: focused regression **79/79**, real Core-to-FastAPI transport **2/2**, build PASS, lint PASS with 19 existing warnings, and owned loopback/tmpfs PostgreSQL E2E **16/16** with fixture database/container/port cleanup.
+- Current Frontend evidence: production build PASS, lint PASS with **0 errors / 137 warnings**, and Playwright **15/15 PASS**. `test-results/.last-run.json` was intentionally kept local and not committed.
+
+All pushes were non-force and remote SHA equality was verified. No production service, model, risk rule, database, deployment, or production-inference approval changed. **`PRODUCTION_AI_BLOCKED_PENDING_APPROVAL` remains controlling.**
+
 ## Final cross-service regression reconciliation — 2026-11-20
 
 **Result:** `AQS101_AQS102_FULL_REGRESSION_PASS`; **FastAPI full regression:** **105/105 PASS**. This supplements the historical account below without changing its production governance boundary: model/risk-rule approval remains **`BLOCKED / PENDING_APPROVAL`**.
