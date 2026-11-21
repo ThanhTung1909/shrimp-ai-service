@@ -8,10 +8,12 @@ Căn cứ khoa học:
 - QCVN 02-19:2014/BNNPTNT
 """
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from enum import Enum
+from math import isfinite
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class NestJSRiskLevel(str, Enum):
@@ -24,17 +26,22 @@ class NestJSRiskLevel(str, Enum):
 class NestJSPredictRequest(BaseModel):
     """
     Dữ liệu yêu cầu dự báo chất lượng nước từ Core Backend NestJS.
-    Chấp nhận cả camelCase và snake_case để tương thích linh hoạt.
+    Chấp nhận canonical fields và ba field legacy current* tại một boundary
+    chuẩn hóa duy nhất. Hai cách đặt tên không được mang giá trị mâu thuẫn.
     Hỗ trợ tiếp nhận các chỉ tiêu mở rộng (TAN, NO2, ORP, độ kiềm, biến thiên mưa).
     """
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(
+        populate_by_name=True,
+        extra="forbid",
+        allow_inf_nan=False,
+    )
 
     pond_id: Optional[str] = Field(default=None, alias="pondId", description="Mã định danh ao nuôi")
     temperature: float = Field(..., ge=0.0, le=50.0, description="Nhiệt độ nước (°C)")
     ph: float = Field(..., ge=0.0, le=14.0, description="Độ pH của nước ao")
     salinity: float = Field(default=15.0, ge=0.0, le=50.0, description="Độ mặn (ppt)")
-    dissolved_oxygen: Optional[float] = Field(
-        default=None,
+    dissolved_oxygen: float = Field(
+        ...,
         alias="dissolvedOxygen",
         ge=0.0,
         le=30.0,
@@ -53,14 +60,90 @@ class NestJSPredictRequest(BaseModel):
     delta_ph: Optional[float] = Field(default=None, alias="deltaPH", description="Biến thiên pH ngày/đêm")
     timestamp: Optional[str] = Field(default=None, description="Thời điểm ghi nhận telemetry")
 
+    @staticmethod
+    def _same_semantic_value(left: Any, right: Any) -> bool:
+        """So sánh input trùng nghĩa mà không coi bool là số đo hợp lệ."""
+        if isinstance(left, bool) or isinstance(right, bool):
+            return False
+        return left == right
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_prediction_fields(cls, value: Any) -> Any:
+        """
+        Chuẩn hóa các key legacy tại boundary schema.
+
+        Legacy keys chỉ là input aliases, không đi qua business service. Khi một
+        metric xuất hiện qua nhiều aliases, mọi giá trị phải tương đương; nếu
+        không request bị từ chối thay vì chọn ngầm một giá trị.
+        """
+        if not isinstance(value, Mapping):
+            return value
+
+        normalized = dict(value)
+        field_groups = (
+            ("temperature", ("temperature", "currentTemp")),
+            ("ph", ("ph", "currentPH")),
+            (
+                "dissolvedOxygen",
+                ("dissolvedOxygen", "dissolved_oxygen", "do", "currentDO"),
+            ),
+        )
+
+        for canonical_name, accepted_names in field_groups:
+            provided = [
+                (field_name, normalized[field_name])
+                for field_name in accepted_names
+                if field_name in normalized
+            ]
+            if not provided:
+                continue
+
+            _, selected_value = provided[0]
+            for field_name, candidate_value in provided[1:]:
+                if not cls._same_semantic_value(selected_value, candidate_value):
+                    names = ", ".join(name for name, _ in provided)
+                    raise ValueError(
+                        f"Conflicting values for {canonical_name} across fields: {names}."
+                    )
+
+            normalized[canonical_name] = selected_value
+            for field_name, _ in provided:
+                if field_name != canonical_name:
+                    normalized.pop(field_name, None)
+
+        return normalized
+
+    @field_validator(
+        "temperature",
+        "ph",
+        "salinity",
+        "dissolved_oxygen",
+        "do",
+        "turbidity",
+        "tan",
+        "no2",
+        "orp",
+        "alkalinity",
+        "delta_temp_rain",
+        "delta_ph",
+        mode="before",
+    )
+    @classmethod
+    def reject_non_numeric_or_non_finite_values(cls, value: Any) -> Any:
+        """Không ép null, bool, string, NaN hoặc Infinity thành telemetry hợp lệ."""
+        if value is None:
+            return value
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("Telemetry values must be finite JSON numbers.")
+        if not isfinite(float(value)):
+            raise ValueError("Telemetry values must be finite JSON numbers.")
+        return value
+
     @property
     def current_do(self) -> float:
-        """Lấy giá trị Oxy hòa tan từ trường dissolved_oxygen hoặc do"""
-        if self.dissolved_oxygen is not None:
-            return float(self.dissolved_oxygen)
-        if self.do is not None:
-            return float(self.do)
-        return 5.0  # Mặc định an toàn nếu không truyền
+        """Trả về DO đã chuẩn hóa sau validation, không dùng giá trị mặc định."""
+        return float(self.dissolved_oxygen)
 
 
 class NestJSPredictResponse(BaseModel):

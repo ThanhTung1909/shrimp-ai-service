@@ -216,8 +216,12 @@ async def predict_water_quality(
     "/v1/ai/water-quality/comprehensive-assessment",
     response_model=ComprehensiveWaterQualityResponse,
     status_code=status.HTTP_200_OK,
-    summary="Đánh giá chất lượng nước chuyên sâu dựa trên nghiên cứu khoa học công bố",
-    description="Phân tích toàn diện 10 chỉ số sinh thái ao tôm, trả về radar chart data, WQI, khuyến nghị và trích dẫn khoa học.",
+    summary="Phân tích phát triển read-only chất lượng nước dựa trên nghiên cứu khoa học công bố",
+    description=(
+        "Phân tích toàn diện các chỉ số sinh thái ao tôm, trả về WQI, xu hướng hai giờ, "
+        "khuyến nghị và trích dẫn khoa học. Route này không ghi cache, không xuất bản alert, "
+        "không được Core dùng cho operational prediction và không phải bằng chứng production AI/model/risk-rule approval."
+    ),
 )
 async def assess_comprehensive_water_quality(
     request: ComprehensiveWaterQualityRequest,
@@ -226,7 +230,11 @@ async def assess_comprehensive_water_quality(
 ) -> ComprehensiveWaterQualityResponse:
     """
     Đánh giá chuyên sâu toàn bộ các chỉ tiêu chất lượng nước nuôi tôm:
-    Phục vụ giao diện Web Portal Dashboard và Mobile Farmer App.
+    Phục vụ phân tích phát triển/read-only cho Web Portal và Mobile Farmer App.
+
+    Route không thực hiện persistence, Redis cache hoặc RabbitMQ alert dispatch.
+    Vì vậy HTTP 200 ở đây là kết quả tính toán nghiên cứu xác định, không thay
+    thế approval gate của production inference tại Core.
     """
     start_time = time.perf_counter()
 
