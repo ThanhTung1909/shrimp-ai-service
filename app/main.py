@@ -245,7 +245,7 @@ async def health_check():
     - TimescaleDB connectivity
     - Cổng và môi trường
     """
-    from app.database import check_db_connection
+    from app.database import check_db_connection_async
 
     is_model_loaded = hasattr(app.state, "feeding_trainer") and app.state.feeding_trainer is not None
     model_version = getattr(app.state, "model_metadata", {}).get("version", "1.0.0") if is_model_loaded else None
@@ -259,8 +259,9 @@ async def health_check():
             "error": "disabled in isolated HTTP test mode",
         }
     else:
-        # Kiểm tra database nhanh (không block nếu offline)
-        db_status = check_db_connection()
+        # SQLAlchemy/psycopg is synchronous; offload its bounded probe so a
+        # slow or unavailable database never blocks the FastAPI event loop.
+        db_status = await check_db_connection_async()
 
     # Kiểm tra Redis nhanh
     redis_connected = False

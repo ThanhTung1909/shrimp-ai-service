@@ -121,17 +121,32 @@ async def test_rabbitmq_publisher_message_schema(mock_rabbitmq_publisher):
 # ==============================================================================
 
 @pytest.mark.anyio
-async def test_rabbitmq_offline_graceful_degradation():
+async def test_rabbitmq_offline_graceful_degradation(monkeypatch):
     """
     Quy tắc Chịu lỗi (Resilience):
     Nếu RabbitMQ broker offline hoặc chưa bật, hệ thống tuyệt đối không làm crash API.
     """
-    # Trỏ tới cổng không tồn tại với timeout ngắn
+    # Mock the I/O boundary rather than relying on a real refused TCP port.
+    # This exercises RabbitMQPublisher.connect()'s error path deterministically
+    # without allowing aio-pika's robust reconnect machinery to create a
+    # network- or platform-dependent test duration.
+    connect_calls = []
+
+    async def broker_offline(*args, **kwargs):
+        connect_calls.append((args, kwargs))
+        raise ConnectionRefusedError("Simulated RabbitMQ broker unavailable")
+
+    monkeypatch.setattr(
+        "app.services.rabbitmq_publisher.aio_pika.connect_robust",
+        broker_offline,
+    )
+
     offline_pub = RabbitMQPublisher(rabbitmq_url="amqp://guest:guest@localhost:9999/")
 
     # connect() không raise exception, trả về False
     connected = await offline_pub.connect()
     assert connected is False
+    assert len(connect_calls) == 1
 
     # ping() trả về False
     assert await offline_pub.ping() is False
@@ -145,6 +160,7 @@ async def test_rabbitmq_offline_graceful_degradation():
         action_suggestion="Kiểm tra môi trường",
     )
     assert ok is False
+    assert len(connect_calls) == 2
 
     # close() an toàn
     await offline_pub.close()

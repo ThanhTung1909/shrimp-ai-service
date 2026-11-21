@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Generator, Optional
 from sqlalchemy import create_engine, text
@@ -29,6 +30,7 @@ def get_engine() -> Engine:
                 max_overflow=20,
                 pool_pre_ping=True,
                 pool_recycle=3600,
+                connect_args={"connect_timeout": settings.db_connect_timeout_seconds},
             )
         except Exception as e:
             logger.warning(
@@ -63,20 +65,28 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def _database_status(error: Optional[str] = None) -> dict:
+    return {
+        "connected": False,
+        "timescaledb_installed": False,
+        "timescaledb_version": None,
+        "error": error,
+    }
+
+
 def check_db_connection() -> dict:
     """
     Kiểm tra trạng thái kết nối tới cơ sở dữ liệu TimescaleDB.
     Xác minh extension TimescaleDB đã sẵn sàng.
     """
-    status = {
-        "connected": False,
-        "timescaledb_installed": False,
-        "timescaledb_version": None,
-        "error": None,
-    }
+    status = _database_status()
     try:
         eng = get_engine()
-        with eng.connect() as connection:
+        # SET LOCAL is scoped to this read-only probe transaction, so a slow
+        # database query cannot leave a persistent statement timeout in the pool.
+        with eng.begin() as connection:
+            statement_timeout_ms = max(1, int(settings.db_health_check_timeout_seconds * 1000))
+            connection.execute(text(f"SET LOCAL statement_timeout = {statement_timeout_ms}"))
             # 1. Kiểm tra kết nối cơ bản
             result = connection.execute(text("SELECT 1;")).scalar()
             if result == 1:
@@ -100,3 +110,16 @@ def check_db_connection() -> dict:
         logger.warning(f"[TimescaleDB Connection Error] {e}")
 
     return status
+
+
+async def check_db_connection_async() -> dict:
+    """Run the synchronous SQLAlchemy health probe off the FastAPI event loop."""
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(check_db_connection),
+            timeout=settings.db_health_check_timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        timeout = settings.db_health_check_timeout_seconds
+        logger.warning("[TimescaleDB Connection Timeout] Health probe exceeded %.2fs", timeout)
+        return _database_status(f"database health check timed out after {timeout:.2f} seconds")
