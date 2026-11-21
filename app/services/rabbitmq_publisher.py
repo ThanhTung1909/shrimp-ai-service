@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import json
 import logging
 from typing import Any, Dict, Optional
+from uuid import UUID, uuid4
 import aio_pika
 
 from app.config import get_settings
@@ -18,6 +19,7 @@ logger = logging.getLogger("ai_service.services.rabbitmq")
 DEFAULT_EXCHANGE = "shrimp.events"
 DEFAULT_QUEUE = "ai_risk_alerts"
 ROUTING_KEY_RISK_DETECTED = "ai.risk.detected"
+EVENT_RISK_LEVELS = {"LOW": "LOW", "MEDIUM": "MEDIUM", "HIGH": "HIGH", "WARNING": "MEDIUM", "DANGER": "HIGH", "CRITICAL": "HIGH"}
 
 
 class RabbitMQPublisher:
@@ -104,11 +106,14 @@ class RabbitMQPublisher:
         action_suggestion: str,
         details: Optional[Dict[str, Any]] = None,
         routing_key: str = ROUTING_KEY_RISK_DETECTED,
+        event_id: Optional[str] = None,
     ) -> bool:
         """
-        Đẩy sự kiện AI Risk Detected vào RabbitMQ Exchange:
+        Đẩy sự kiện AI Risk Detected vào RabbitMQ Exchange. A retry caller must
+        pass its original event_id; a new business event gets a fresh UUIDv4.
         {
           "event": "ai.risk.detected",
+          "event_id": "uuid-v4",
           "pond_id": "...",
           "risk_level": "HIGH",
           "predicted_metric": "dissolved_oxygen",
@@ -118,10 +123,23 @@ class RabbitMQPublisher:
           "timestamp": "..."
         }
         """
+        resolved_event_id = event_id or str(uuid4())
+        try:
+            UUID(resolved_event_id)
+        except (TypeError, ValueError):
+            logger.warning("[RabbitMQ Publish Error] Invalid event_id for AI risk alert.")
+            return False
+
+        normalized_risk_level = EVENT_RISK_LEVELS.get(risk_level.upper())
+        if normalized_risk_level is None:
+            logger.warning("[RabbitMQ Publish Error] Invalid AI risk level for event.")
+            return False
+
         payload = {
             "event": "ai.risk.detected",
+            "event_id": resolved_event_id,
             "pond_id": pond_id,
-            "risk_level": risk_level,
+            "risk_level": normalized_risk_level,
             "predicted_metric": metric,
             "predicted_value": round(float(predicted_value), 2),
             "action_suggestion": action_suggestion,

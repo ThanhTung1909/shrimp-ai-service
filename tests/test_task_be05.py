@@ -108,7 +108,7 @@ async def test_rabbitmq_publisher_message_schema(mock_rabbitmq_publisher):
     payload = msg["payload"]
     assert payload["event"] == "ai.risk.detected"
     assert payload["pond_id"] == pond_id
-    assert payload["risk_level"] == "CRITICAL"
+    assert payload["risk_level"] == "HIGH"
     assert payload["predicted_metric"] == "dissolved_oxygen"
     assert payload["predicted_value"] == 2.45
     assert "oxy viên" in payload["action_suggestion"]
@@ -185,7 +185,7 @@ def test_api_feeding_forecast_publishes_event_on_critical_risk(client):
     event = exchange.published_messages[0]["payload"]
     assert event["event"] == "ai.risk.detected"
     assert event["pond_id"] == pond_id
-    assert event["risk_level"] == "CRITICAL"
+    assert event["risk_level"] == "HIGH"
     assert event["predicted_metric"] == "feeding_intake"
 
 
@@ -218,7 +218,7 @@ def test_api_predict_publishes_event_on_danger(client):
     event = exchange.published_messages[0]["payload"]
     assert event["event"] == "ai.risk.detected"
     assert event["pond_id"] == pond_id
-    assert event["risk_level"] == "DANGER"
+    assert event["risk_level"] == "HIGH"
     assert event["predicted_metric"] == "dissolved_oxygen"
 
 
