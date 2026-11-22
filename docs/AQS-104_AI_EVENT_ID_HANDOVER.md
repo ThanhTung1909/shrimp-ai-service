@@ -13,6 +13,12 @@ remain. Docker config/engine access is still denied, so no RabbitMQ or
 PostgreSQL fixture was inspected or changed and no cross-service rerun is
 claimed. Production approval remains unchanged.
 
+Publication: the source/test implementation commit `0516bc8` was normal-pushed
+to `origin/feature/AQS-104_ai-risk-event-id` and direct fetch/SHA equality was
+verified. GitHub Actions returned no matching run for that SHA; this is
+**CI/CD: no run found**, not a CI pass. No pull request, merge, deployment or
+production configuration change occurred.
+
 ## Offline-timeout remediation — 2026-11-21
 
 ### Root cause and decision
