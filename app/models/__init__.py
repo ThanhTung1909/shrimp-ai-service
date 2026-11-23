@@ -4,6 +4,10 @@ Chứa mô hình học máy XGBoost Feeding, AI Soft Sensor Benson & Krause (198
 và Động cơ Đánh giá Chất lượng Nước Đa Thông số (Aquaculture Water Quality Engine).
 """
 
+from app.models.disease_risk import (
+    assess_disease_risk,
+    forecast_water_quality_trajectory,
+)
 from app.models.soft_sensor import (
     analyze_do_saturation_status,
     benson_krause_do_saturation,
@@ -44,4 +48,6 @@ __all__ = [
     "FeedingModelTrainer",
     "XGBoostFeedingTrainer",
     "load_trained_feeding_model",
+    "forecast_water_quality_trajectory",
+    "assess_disease_risk",
 ]

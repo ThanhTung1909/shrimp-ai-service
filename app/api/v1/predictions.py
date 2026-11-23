@@ -14,6 +14,10 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.api.deps import get_rabbitmq_publisher, get_redis_cache
+from app.models.disease_risk import (
+    assess_disease_risk,
+    forecast_water_quality_trajectory,
+)
 from app.models.soft_sensor import (
     benson_krause_do_saturation,
 )
@@ -24,9 +28,15 @@ from app.models.water_quality import (
 from app.schemas.prediction import (
     ComprehensiveWaterQualityRequest,
     ComprehensiveWaterQualityResponse,
+    DiseaseRiskItem,
+    DiseaseRiskRequest,
+    DiseaseRiskResponse,
     NestJSPredictRequest,
     NestJSPredictResponse,
     NestJSRiskLevel,
+    WaterQualityForecastPoint,
+    WaterQualityForecastRequest,
+    WaterQualityForecastResponse,
 )
 from app.services.rabbitmq_publisher import RabbitMQPublisher
 from app.services.redis_cache import RedisCacheService
@@ -300,3 +310,131 @@ async def get_latest_water_quality_prediction(
             detail=f"Chưa có dữ liệu dự báo chất lượng nước trong cache cho ao: {pond_id}",
         )
     return NestJSPredictResponse(**cached)
+
+
+def _parse_iso_timestamp(ts_str: str) -> datetime:
+    normalized = f"{ts_str[:-1]}+00:00" if ts_str.endswith(("Z", "z")) else ts_str
+    return datetime.fromisoformat(normalized)
+
+
+@router.post(
+    "/predict/water-quality",
+    response_model=WaterQualityForecastResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Dự báo quỹ đạo chất lượng nước 12-24 giờ tới",
+    description="Dự báo chuỗi thời gian DO, pH, nhiệt độ và điểm rủi ro sinh thái theo giờ địa phương Việt Nam (UTC+7).",
+)
+async def predict_water_quality_trajectory(
+    request: WaterQualityForecastRequest,
+    redis_cache: RedisCacheService = Depends(get_redis_cache),
+) -> WaterQualityForecastResponse:
+    """
+    Endpoint dự báo quỹ đạo chất lượng nước 12-24h cho Core Backend NestJS.
+    Lưu cache tùy chọn vào Redis, không phát sự kiện cảnh báo RabbitMQ.
+    """
+    start_time = time.perf_counter()
+    base_dt = _parse_iso_timestamp(request.timestamp)
+    metrics = request.currentMetrics
+    shrimp_density = request.pondProfile.shrimpDensity if request.pondProfile else None
+
+    forecast = forecast_water_quality_trajectory(
+        base_timestamp=base_dt,
+        horizon_hours=request.horizonHours,
+        step_hours=request.stepHours,
+        current_do=metrics.currentDO,
+        current_ph=metrics.currentPH,
+        current_temp=metrics.currentTemp,
+        salinity=metrics.salinity,
+        turbidity=metrics.turbidity,
+        recent_history=request.recentHistory,
+        shrimp_density=shrimp_density,
+    )
+
+    latency_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
+
+    response_data = WaterQualityForecastResponse(
+        pondId=request.pondId,
+        horizonHours=request.horizonHours,
+        stepHours=request.stepHours,
+        overallRiskScore=forecast["overallRiskScore"],
+        overallRiskLevel=NestJSRiskLevel(forecast["overallRiskLevel"]),
+        series=[WaterQualityForecastPoint(**pt) for pt in forecast["series"]],
+        factors=forecast["factors"],
+        recommendations=forecast["recommendations"],
+        latencyMs=latency_ms,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    )
+
+    if redis_cache is not None and request.pondId:
+        await redis_cache.set_water_quality_trajectory(
+            request.pondId,
+            response_data.model_dump(mode="json"),
+        )
+
+    logger.info(
+        f"[Water Trajectory] Ao: {request.pondId} | Horizon: {request.horizonHours}h (step {request.stepHours}h) | "
+        f"Overall: {response_data.overallRiskScore} ({response_data.overallRiskLevel.value}) | Latency: {latency_ms}ms"
+    )
+    return response_data
+
+
+@router.post(
+    "/predict/disease-risk",
+    response_model=DiseaseRiskResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Đánh giá nguy cơ dịch bệnh tôm (WSSV & AHPND/EMS)",
+    description="Phân tích rủi ro bùng phát Bệnh Đốm trắng (WSSV) và Hoại tử gan tụy cấp (AHPND/EMS) dựa trên telemetry và biến động 24h.",
+)
+async def predict_disease_risk(
+    request: DiseaseRiskRequest,
+    redis_cache: RedisCacheService = Depends(get_redis_cache),
+) -> DiseaseRiskResponse:
+    """
+    Endpoint đánh giá rủi ro dịch bệnh tôm (WSSV, AHPND/EMS) cho Core Backend NestJS.
+    Lưu cache tùy chọn vào Redis, không phát sự kiện cảnh báo RabbitMQ.
+    """
+    start_time = time.perf_counter()
+    metrics = request.currentMetrics
+    var24 = request.variability24h
+    profile = request.pondProfile
+
+    assessment = assess_disease_risk(
+        current_do=metrics.currentDO,
+        current_ph=metrics.currentPH,
+        current_temp=metrics.currentTemp,
+        salinity=metrics.salinity,
+        turbidity=metrics.turbidity,
+        nh3=metrics.nh3,
+        no2=metrics.no2,
+        temperature_delta=var24.temperatureDelta if var24 else None,
+        ph_delta=var24.phDelta if var24 else None,
+        min_do=var24.minDO if var24 else None,
+        min_temp=var24.minTemp if var24 else None,
+        max_temp=var24.maxTemp if var24 else None,
+        shrimp_density=profile.shrimpDensity if profile else None,
+        days_of_culture=profile.daysOfCulture if profile else None,
+    )
+
+    latency_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
+
+    response_data = DiseaseRiskResponse(
+        pondId=request.pondId,
+        overallRiskScore=assessment["overallRiskScore"],
+        overallRiskLevel=NestJSRiskLevel(assessment["overallRiskLevel"]),
+        diseases=[DiseaseRiskItem(**item) for item in assessment["diseases"]],
+        recommendations=assessment["recommendations"],
+        latencyMs=latency_ms,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    )
+
+    if redis_cache is not None and request.pondId:
+        await redis_cache.set_disease_risk_forecast(
+            request.pondId,
+            response_data.model_dump(mode="json"),
+        )
+
+    logger.info(
+        f"[Disease Risk] Ao: {request.pondId} | Overall: {response_data.overallRiskScore} "
+        f"({response_data.overallRiskLevel.value}) | Latency: {latency_ms}ms"
+    )
+    return response_data
