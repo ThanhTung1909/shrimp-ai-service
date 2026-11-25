@@ -31,13 +31,34 @@ class NestJSPredictRequest(BaseModel):
     """
     model_config = ConfigDict(populate_by_name=True)
 
-    pond_id: Optional[str] = Field(default=None, alias="pondId", description="Mã định danh ao nuôi")
-    temperature: float = Field(..., ge=0.0, le=50.0, description="Nhiệt độ nước (°C)")
-    ph: float = Field(..., ge=0.0, le=14.0, description="Độ pH của nước ao")
+    pond_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("pond_id", "pondId"),
+        description="Mã định danh ao nuôi",
+    )
+    temperature: float = Field(
+        ...,
+        validation_alias=AliasChoices("temperature", "currentTemp", "current_temp"),
+        ge=0.0,
+        le=50.0,
+        description="Nhiệt độ nước (°C)",
+    )
+    ph: float = Field(
+        ...,
+        validation_alias=AliasChoices("ph", "currentPH", "current_ph"),
+        ge=0.0,
+        le=14.0,
+        description="Độ pH của nước ao",
+    )
     salinity: float = Field(default=15.0, ge=0.0, le=50.0, description="Độ mặn (ppt)")
     dissolved_oxygen: Optional[float] = Field(
         default=None,
-        alias="dissolvedOxygen",
+        validation_alias=AliasChoices(
+            "dissolved_oxygen",
+            "dissolvedOxygen",
+            "currentDO",
+            "current_do",
+        ),
         ge=0.0,
         le=30.0,
         description="Nồng độ Oxy hòa tan hiện tại (mg/L)",
@@ -45,6 +66,16 @@ class NestJSPredictRequest(BaseModel):
     # Hỗ trợ trường do ngắn gọn nếu gửi từ cảm biến
     do: Optional[float] = Field(default=None, ge=0.0, le=30.0)
     turbidity: float = Field(default=25.0, ge=0.0, le=500.0, description="Độ đục (NTU)")
+
+    @field_validator("salinity", mode="before")
+    @classmethod
+    def default_salinity_if_none(cls, v: Any) -> Any:
+        return 15.0 if v is None else v
+
+    @field_validator("turbidity", mode="before")
+    @classmethod
+    def default_turbidity_if_none(cls, v: Any) -> Any:
+        return 25.0 if v is None else v
     
     # Các chỉ tiêu hóa lý sinh bổ sung theo nghiên cứu công bố (tùy chọn)
     tan: Optional[float] = Field(default=None, ge=0.0, le=20.0, description="Tổng Amoniac TAN (mg/L)")
