@@ -240,6 +240,29 @@ def test_api_predict_multi_parameter_enrichment(client):
     assert "actionRecommendations" in data
 
 
+def test_api_predict_rejects_nestjs_current_metric_aliases(client):
+    payload = {
+        "pondId": "22222222-2222-2222-2222-222222222201",
+        "currentDO": 6.21,
+        "currentPH": 7.82,
+        "currentTemp": 28.5,
+        "salinity": 15.77,
+        "turbidity": 22.5,
+        "timestamp": "2026-11-25T15:00:00.000Z",
+    }
+
+    response = client.post("/api/predict", json=payload)
+    assert response.status_code == 422
+    data = response.json()
+
+    assert data["error_type"] == "VALIDATION_ERROR"
+    errors = {(error["field"], error["type"]) for error in data["errors"]}
+    for alias in ("currentDO", "currentPH", "currentTemp"):
+        assert (f"body -> {alias}", "extra_forbidden") in errors
+    for field in ("dissolvedOxygen", "ph", "temperature"):
+        assert (f"body -> {field}", "missing") in errors
+
+
 def test_api_comprehensive_assessment_endpoint(client):
     """
     Kiểm tra endpoint chuyên sâu POST /api/v1/ai/water-quality/comprehensive-assessment
