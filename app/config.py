@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     db_user: str = Field(default="postgres", alias="DB_USER")
     db_pass: str = Field(default="LocalSecretPass!23", alias="DB_PASS")
     db_name: str = Field(default="shrimp_local_db", alias="DB_NAME")
+    db_connect_timeout_seconds: int = Field(default=3, alias="DB_CONNECT_TIMEOUT_SECONDS")
+    db_health_check_timeout_seconds: float = Field(default=3.0, alias="DB_HEALTH_CHECK_TIMEOUT_SECONDS")
 
     # Redis Cache
     redis_host: str = Field(default="localhost", alias="REDIS_HOST")
