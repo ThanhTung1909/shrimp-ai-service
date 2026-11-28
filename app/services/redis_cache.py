@@ -17,6 +17,8 @@ logger = logging.getLogger("ai_service.services.redis")
 
 FEEDING_CACHE_PREFIX = "ai:forecast:feeding"
 WATER_CACHE_PREFIX = "ai:forecast:water"
+WATER_TRAJECTORY_CACHE_PREFIX = "ai:forecast:water_trajectory"
+DISEASE_CACHE_PREFIX = "ai:forecast:disease"
 DEFAULT_CACHE_TTL = 1800  # 30 phút (đồng bộ với chu kỳ Cronjob NestJS)
 
 
@@ -113,6 +115,16 @@ class RedisCacheService:
         clean_id = pond_id.strip() if pond_id else "default"
         return f"{WATER_CACHE_PREFIX}:{clean_id}"
 
+    def make_water_trajectory_key(self, pond_id: str) -> str:
+        """Sinh key lưu kết quả dự báo quỹ đạo chất lượng nước 12-24h theo ao"""
+        clean_id = pond_id.strip() if pond_id else "default"
+        return f"{WATER_TRAJECTORY_CACHE_PREFIX}:{clean_id}"
+
+    def make_disease_key(self, pond_id: str) -> str:
+        """Sinh key lưu kết quả đánh giá rủi ro dịch bệnh theo ao"""
+        clean_id = pond_id.strip() if pond_id else "default"
+        return f"{DISEASE_CACHE_PREFIX}:{clean_id}"
+
     async def get_feeding_forecast(self, pond_id: str) -> Optional[Dict[str, Any]]:
         """Đọc kết quả dự báo lượng thức ăn mới nhất từ Redis"""
         key = self.make_feeding_key(pond_id)
@@ -142,6 +154,36 @@ class RedisCacheService:
         """Ghi nhận kết quả dự báo chất lượng nước mới nhất vào Redis"""
         key = self.make_water_key(pond_id)
         return await self.set_json(key, predict_data, ttl=ttl)
+
+    async def get_water_quality_trajectory(self, pond_id: str) -> Optional[Dict[str, Any]]:
+        """Đọc kết quả dự báo quỹ đạo chất lượng nước 12-24h mới nhất từ Redis"""
+        key = self.make_water_trajectory_key(pond_id)
+        return await self.get_json(key)
+
+    async def set_water_quality_trajectory(
+        self,
+        pond_id: str,
+        forecast_data: Dict[str, Any],
+        ttl: Optional[int] = None,
+    ) -> bool:
+        """Ghi nhận kết quả dự báo quỹ đạo chất lượng nước 12-24h mới nhất vào Redis"""
+        key = self.make_water_trajectory_key(pond_id)
+        return await self.set_json(key, forecast_data, ttl=ttl)
+
+    async def get_disease_risk_forecast(self, pond_id: str) -> Optional[Dict[str, Any]]:
+        """Đọc kết quả đánh giá rủi ro dịch bệnh mới nhất từ Redis"""
+        key = self.make_disease_key(pond_id)
+        return await self.get_json(key)
+
+    async def set_disease_risk_forecast(
+        self,
+        pond_id: str,
+        forecast_data: Dict[str, Any],
+        ttl: Optional[int] = None,
+    ) -> bool:
+        """Ghi nhận kết quả đánh giá rủi ro dịch bệnh mới nhất vào Redis"""
+        key = self.make_disease_key(pond_id)
+        return await self.set_json(key, forecast_data, ttl=ttl)
 
     async def close(self) -> None:
         """Đóng kết nối Redis client an toàn"""

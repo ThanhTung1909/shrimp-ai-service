@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.main import app
-from app.schemas.prediction import NestJSPredictRequest
+from app.schemas.prediction import CompatibleNestJSPredictRequest, NestJSPredictRequest
 
 
 CANONICAL_ASSESSMENT_PATH = "/api/v1/ai/water-quality/comprehensive-assessment"
@@ -64,7 +64,7 @@ def client():
 
 def test_schema_normalizes_canonical_and_legacy_payloads_identically():
     canonical = NestJSPredictRequest.model_validate(canonical_payload())
-    legacy = NestJSPredictRequest.model_validate(legacy_payload())
+    legacy = CompatibleNestJSPredictRequest.model_validate(legacy_payload())
 
     assert canonical.model_dump() == legacy.model_dump()
     assert legacy.temperature == 29.5
@@ -72,21 +72,16 @@ def test_schema_normalizes_canonical_and_legacy_payloads_identically():
     assert legacy.dissolved_oxygen == 5.2
 
 
-def test_schema_accepts_the_documented_minimal_legacy_payload():
-    request = NestJSPredictRequest.model_validate(
-        {
-            "pondId": "78ad6b2a-b628-4c7f-9f2c-91953a3ea2cb",
-            "currentTemp": 29.5,
-            "currentPH": 7.8,
-            "currentDO": 5.2,
-        }
+@pytest.mark.parametrize("field", ["salinity", "turbidity"])
+def test_http_rejects_legacy_payload_without_required_telemetry(client, field):
+    payload = legacy_payload()
+    del payload[field]
+    response = client.post("/api/predict", json=payload)
+    assert response.status_code == 422
+    assert any(
+        item["field"] == f"body -> {field}" and item["type"] == "missing"
+        for item in response.json()["errors"]
     )
-
-    assert request.temperature == 29.5
-    assert request.ph == 7.8
-    assert request.dissolved_oxygen == 5.2
-    assert request.salinity == 15.0
-    assert request.turbidity == 25.0
 
 
 def test_schema_accepts_equal_canonical_and_legacy_values():
@@ -96,7 +91,7 @@ def test_schema_accepts_equal_canonical_and_legacy_values():
         "currentDO": 5.2,
     }
 
-    request = NestJSPredictRequest.model_validate(payload)
+    request = CompatibleNestJSPredictRequest.model_validate(payload)
 
     assert request.temperature == 29.5
     assert request.ph == 7.8
@@ -107,13 +102,13 @@ def test_schema_rejects_conflicting_canonical_and_legacy_values():
     payload = canonical_payload() | {"currentDO": 4.8}
 
     with pytest.raises(ValidationError, match="Conflicting values"):
-        NestJSPredictRequest.model_validate(payload)
+        CompatibleNestJSPredictRequest.model_validate(payload)
 
 
 def test_schema_preserves_zero_from_legacy_payload():
     payload = legacy_payload() | {"currentDO": 0.0}
 
-    request = NestJSPredictRequest.model_validate(payload)
+    request = CompatibleNestJSPredictRequest.model_validate(payload)
 
     assert request.dissolved_oxygen == 0.0
     assert request.current_do == 0.0
@@ -133,7 +128,7 @@ def test_schema_rejects_invalid_legacy_telemetry(field, value):
     payload = legacy_payload() | {field: value}
 
     with pytest.raises(ValidationError):
-        NestJSPredictRequest.model_validate(payload)
+        CompatibleNestJSPredictRequest.model_validate(payload)
 
 
 def test_http_accepts_canonical_and_legacy_payloads(client):

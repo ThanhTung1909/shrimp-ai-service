@@ -240,6 +240,26 @@ def test_api_predict_multi_parameter_enrichment(client):
     assert "actionRecommendations" in data
 
 
+def test_api_predict_accepts_complete_nestjs_current_metric_aliases(client):
+    payload = {
+        "pondId": "22222222-2222-2222-2222-222222222201",
+        "currentDO": 6.21,
+        "currentPH": 7.82,
+        "currentTemp": 28.5,
+        "salinity": 15.77,
+        "turbidity": 22.5,
+        "timestamp": "2026-11-25T15:00:00.000Z",
+    }
+
+    response = client.post("/api/predict", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["riskLevel"] == "SAFE"
+    assert data["alert"] is False
+    assert isinstance(data["predictedDO"], float)
+    assert isinstance(data["predictedPH"], float)
+
+
 def test_api_comprehensive_assessment_endpoint(client):
     """
     Kiểm tra endpoint chuyên sâu POST /api/v1/ai/water-quality/comprehensive-assessment

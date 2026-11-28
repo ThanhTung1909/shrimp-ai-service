@@ -170,6 +170,7 @@ def test_predict_nestjs_danger_alert(client):
         "ph": 9.2,           # pH kiềm cao
         "salinity": 20.0,
         "dissolved_oxygen": 2.6,  # Tụt oxy nghiêm trọng
+        "turbidity": 12.0,        # Dữ liệu fixture kiểm thử (NTU)
     }
 
     response = client.post("/api/predict", json=payload_danger)

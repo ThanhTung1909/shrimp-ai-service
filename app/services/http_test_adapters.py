@@ -11,6 +11,8 @@ class HttpTestRedisCache:
     def __init__(self) -> None:
         self._feeding: Dict[str, Dict[str, Any]] = {}
         self._water_quality: Dict[str, Dict[str, Any]] = {}
+        self._water_quality_trajectory: Dict[str, Dict[str, Any]] = {}
+        self._disease_risk: Dict[str, Dict[str, Any]] = {}
 
     async def ping(self) -> bool:
         return False
@@ -43,9 +45,23 @@ class HttpTestRedisCache:
         self._water_quality[pond_id] = dict(predict_data)
         return True
 
+    async def set_water_quality_trajectory(
+        self, pond_id: str, forecast_data: Dict[str, Any], ttl: Optional[int] = None,
+    ) -> bool:
+        self._water_quality_trajectory[pond_id] = dict(forecast_data)
+        return True
+
+    async def set_disease_risk_forecast(
+        self, pond_id: str, forecast_data: Dict[str, Any], ttl: Optional[int] = None,
+    ) -> bool:
+        self._disease_risk[pond_id] = dict(forecast_data)
+        return True
+
     async def close(self) -> None:
         self._feeding.clear()
         self._water_quality.clear()
+        self._water_quality_trajectory.clear()
+        self._disease_risk.clear()
 
 
 class HttpTestRabbitMQPublisher:
