@@ -8,12 +8,13 @@ Căn cứ khoa học:
 - QCVN 02-19:2014/BNNPTNT
 """
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from enum import Enum
 import math
 import re
 from typing import Any, Dict, List, Literal, Optional
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class NestJSRiskLevel(str, Enum):
@@ -30,7 +31,7 @@ class NestJSPredictRequest(BaseModel):
     adapter contract ai-develop-v1; không có giá trị telemetry mặc định.
     Hỗ trợ tiếp nhận các chỉ tiêu mở rộng (TAN, NO2, ORP, độ kiềm, biến thiên mưa).
     """
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", allow_inf_nan=False)
 
     pond_id: Optional[str] = Field(default=None, alias="pondId", description="Mã định danh ao nuôi")
     temperature: float = Field(..., ge=0.0, le=50.0, description="Nhiệt độ nước (°C)")
@@ -53,6 +54,94 @@ class NestJSPredictRequest(BaseModel):
     delta_temp_rain: Optional[float] = Field(default=None, alias="deltaTempRain", description="Độ sụt nhiệt độ do mưa (°C)")
     delta_ph: Optional[float] = Field(default=None, alias="deltaPH", description="Biến thiên pH ngày/đêm")
     timestamp: Optional[str] = Field(default=None, description="Thời điểm ghi nhận telemetry")
+
+    @field_validator(
+        "temperature",
+        "ph",
+        "salinity",
+        "dissolved_oxygen",
+        "turbidity",
+        "tan",
+        "no2",
+        "orp",
+        "alkalinity",
+        "delta_temp_rain",
+        "delta_ph",
+        mode="before",
+    )
+    @classmethod
+    def reject_non_numeric_or_non_finite_values(cls, value: Any) -> Any:
+        """Không ép null, bool, string, NaN hoặc Infinity thành telemetry hợp lệ."""
+        if value is None:
+            return value
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("Telemetry values must be finite JSON numbers.")
+        if not math.isfinite(value):
+            raise ValueError("Telemetry values must be finite JSON numbers.")
+        return value
+
+
+class CompatibleNestJSPredictRequest(NestJSPredictRequest):
+    """HTTP boundary adapter for complete canonical and legacy payloads."""
+
+    @property
+    def current_do(self) -> float:
+        return self.dissolved_oxygen
+
+    @staticmethod
+    def _same_semantic_value(left: Any, right: Any) -> bool:
+        """So sánh input trùng nghĩa mà không coi bool là số đo hợp lệ."""
+        if isinstance(left, bool) or isinstance(right, bool):
+            return False
+        return left == right
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_prediction_fields(cls, value: Any) -> Any:
+        """
+        Chuẩn hóa các key legacy tại boundary schema.
+
+        Legacy keys chỉ là input aliases, không đi qua business service. Khi một
+        metric xuất hiện qua nhiều aliases, mọi giá trị phải tương đương; nếu
+        không request bị từ chối thay vì chọn ngầm một giá trị.
+        """
+        if not isinstance(value, Mapping):
+            return value
+
+        normalized = dict(value)
+        field_groups = (
+            ("temperature", ("temperature", "currentTemp")),
+            ("ph", ("ph", "currentPH")),
+            (
+                "dissolvedOxygen",
+                ("dissolvedOxygen", "dissolved_oxygen", "do", "currentDO"),
+            ),
+        )
+
+        for canonical_name, accepted_names in field_groups:
+            provided = [
+                (field_name, normalized[field_name])
+                for field_name in accepted_names
+                if field_name in normalized
+            ]
+            if not provided:
+                continue
+
+            _, selected_value = provided[0]
+            for field_name, candidate_value in provided[1:]:
+                if not cls._same_semantic_value(selected_value, candidate_value):
+                    names = ", ".join(name for name, _ in provided)
+                    raise ValueError(
+                        f"Conflicting values for {canonical_name} across fields: {names}."
+                    )
+
+            normalized[canonical_name] = selected_value
+            for field_name, _ in provided:
+                if field_name != canonical_name:
+                    normalized.pop(field_name, None)
+
+        return normalized
+
 
 class NestJSPredictResponse(BaseModel):
     """

@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import json
 import logging
+import os
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -28,6 +29,12 @@ logging.basicConfig(
 logger = logging.getLogger("ai_service.main")
 
 settings = get_settings()
+HTTP_TEST_MODE_ENV = "AQUASENSE_HTTP_TEST_MODE"
+
+
+def is_http_test_mode() -> bool:
+    """Enable dependency-free lifecycle only for an explicit test process."""
+    return os.getenv(HTTP_TEST_MODE_ENV, "").strip().lower() == "true"
 
 
 @asynccontextmanager
@@ -74,25 +81,36 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.feeding_trainer = None
         app.state.model_metadata = {}
 
-    # 2. Khởi tạo Redis Cache Service bất đồng bộ
-    from app.services.redis_cache import RedisCacheService
-    redis_service = RedisCacheService()
-    app.state.redis_service = redis_service
-    is_redis_ready = await redis_service.ping()
-    if is_redis_ready:
-        logger.info("[Lifespan Redis] Kết nối Redis Cache Server thành công (TTL 1800s).")
-    else:
-        logger.warning("[Lifespan Redis Warning] Redis Server chưa sẵn sàng, kích hoạt chế độ Graceful Degradation.")
+    app.state.http_test_mode = is_http_test_mode()
+    if app.state.http_test_mode:
+        from app.services.http_test_adapters import HttpTestRabbitMQPublisher, HttpTestRedisCache
 
-    # 3. Khởi tạo RabbitMQ Event Publisher bất đồng bộ (aio-pika)
-    from app.services.rabbitmq_publisher import RabbitMQPublisher
-    rmq_publisher = RabbitMQPublisher()
-    app.state.rabbitmq_publisher = rmq_publisher
-    is_rmq_ready = await rmq_publisher.connect()
-    if is_rmq_ready:
-        logger.info("[Lifespan RabbitMQ] Sẵn sàng xuất bản sự kiện cảnh báo sớm sang RabbitMQ.")
+        app.state.redis_service = HttpTestRedisCache()
+        app.state.rabbitmq_publisher = HttpTestRabbitMQPublisher()
+        app.state.http_test_predict_request_count = 0
+        logger.info("[Lifespan HTTP Test] Dùng adapter in-memory; không kết nối Redis/RabbitMQ.")
     else:
-        logger.warning("[Lifespan RabbitMQ Warning] RabbitMQ Broker chưa sẵn sàng, kích hoạt chế độ Graceful Degradation.")
+        # 2. Khởi tạo Redis Cache Service bất đồng bộ
+        from app.services.redis_cache import RedisCacheService
+
+        redis_service = RedisCacheService()
+        app.state.redis_service = redis_service
+        is_redis_ready = await redis_service.ping()
+        if is_redis_ready:
+            logger.info("[Lifespan Redis] Kết nối Redis Cache Server thành công (TTL 1800s).")
+        else:
+            logger.warning("[Lifespan Redis Warning] Redis Server chưa sẵn sàng, kích hoạt chế độ Graceful Degradation.")
+
+        # 3. Khởi tạo RabbitMQ Event Publisher bất đồng bộ (aio-pika)
+        from app.services.rabbitmq_publisher import RabbitMQPublisher
+
+        rmq_publisher = RabbitMQPublisher()
+        app.state.rabbitmq_publisher = rmq_publisher
+        is_rmq_ready = await rmq_publisher.connect()
+        if is_rmq_ready:
+            logger.info("[Lifespan RabbitMQ] Sẵn sàng xuất bản sự kiện cảnh báo sớm sang RabbitMQ.")
+        else:
+            logger.warning("[Lifespan RabbitMQ Warning] RabbitMQ Broker chưa sẵn sàng, kích hoạt chế độ Graceful Degradation.")
 
     yield
 
@@ -232,8 +250,17 @@ async def health_check():
     is_model_loaded = hasattr(app.state, "feeding_trainer") and app.state.feeding_trainer is not None
     model_version = getattr(app.state, "model_metadata", {}).get("version", "1.0.0") if is_model_loaded else None
 
-    # Kiểm tra database nhanh (không block nếu offline)
-    db_status = check_db_connection()
+    # HTTP-only test mode không được tạo kết nối tới database cấu hình của ứng dụng.
+    if getattr(app.state, "http_test_mode", False):
+        db_status = {
+            "connected": False,
+            "timescaledb_installed": False,
+            "timescaledb_version": None,
+            "error": "disabled in isolated HTTP test mode",
+        }
+    else:
+        # Kiểm tra database nhanh (không block nếu offline)
+        db_status = check_db_connection()
 
     # Kiểm tra Redis nhanh
     redis_connected = False
@@ -271,4 +298,18 @@ app.include_router(api_v1_router, prefix="/api/v1")
 
 # Đăng ký trực tiếp cho NestJS PredictionsService: /api/predict
 app.include_router(predictions_direct_router, prefix="/api")
+
+
+if is_http_test_mode():
+    @app.middleware("http")
+    async def count_http_test_prediction_requests(request: Request, call_next):
+        if request.url.path == "/api/predict":
+            app.state.http_test_predict_request_count += 1
+        return await call_next(request)
+
+
+    @app.get("/_test/http-request-count", include_in_schema=False)
+    async def get_http_test_request_count() -> dict[str, int]:
+        """Expose only test-process request counts for cross-process assertions."""
+        return {"predictRequests": app.state.http_test_predict_request_count}
 
