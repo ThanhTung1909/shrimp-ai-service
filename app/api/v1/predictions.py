@@ -64,7 +64,7 @@ def compute_water_quality_forecast(
     Kết hợp Benson & Krause (1984), Cân bằng nhiệt động học Emerson (1975),
     và Động cơ Đánh giá Chất lượng Nước Đa Thông số chuẩn hóa theo nghiên cứu đã công bố.
     """
-    current_do = req.current_do
+    current_do = req.dissolved_oxygen
     temp = req.temperature
     ph = req.ph
     salinity = req.salinity
@@ -174,7 +174,7 @@ async def predict_water_quality(
     latency = round((time.perf_counter() - start_time) * 1000.0, 2)
 
     logger.info(
-        f"[NestJS Predict Multi-Param] Ao: {request.pond_id} | DO: {request.current_do} -> PredDO: {pred_do} | "
+        f"[NestJS Predict Multi-Param] Ao: {request.pond_id} | DO: {request.dissolved_oxygen} -> PredDO: {pred_do} | "
         f"WQI: {wqi_score} ({wqi_class}) | Score: {risk_score} | Level: {risk_level.value} | Latency: {latency}ms"
     )
 
@@ -200,7 +200,7 @@ async def predict_water_quality(
 
     # 2. Đẩy sự kiện cảnh báo sớm vào RabbitMQ khi kích hoạt cờ alert
     if (alert or risk_level == NestJSRiskLevel.DANGER) and request.pond_id:
-        alert_metric = "dissolved_oxygen" if (request.current_do < 3.5 or pred_do < 3.5) else "water_quality"
+        alert_metric = "dissolved_oxygen" if (request.dissolved_oxygen < 3.5 or pred_do < 3.5) else "water_quality"
         await rabbitmq.publish_risk_alert(
             pond_id=request.pond_id,
             risk_level=risk_level.value,

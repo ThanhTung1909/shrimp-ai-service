@@ -205,6 +205,7 @@ def test_api_predict_publishes_event_on_danger(client):
         "ph": 9.2,
         "salinity": 15.0,
         "dissolvedOxygen": 2.5,  # Tụt oxy nghiêm trọng -> DANGER
+        "turbidity": 12.0,  # Test fixture (NTU)
     }
 
     response = client.post("/api/predict", json=payload)

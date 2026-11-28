@@ -203,6 +203,7 @@ def test_api_predict_caching_flow(client):
         "ph": 7.8,
         "salinity": 15.0,
         "dissolvedOxygen": 5.2,
+        "turbidity": 12.0,  # Test fixture (NTU)
     }
 
     post_resp = client.post("/api/predict", json=payload)
