@@ -9,7 +9,9 @@ Kiểm tra chi tiết:
 Do Backend-Integration-Agent chủ trì.
 """
 
+import asyncio
 import json
+import time
 from typing import Any, Dict, List, Optional
 import pytest
 from fastapi.testclient import TestClient
@@ -108,7 +110,7 @@ async def test_rabbitmq_publisher_message_schema(mock_rabbitmq_publisher):
     payload = msg["payload"]
     assert payload["event"] == "ai.risk.detected"
     assert payload["pond_id"] == pond_id
-    assert payload["risk_level"] == "CRITICAL"
+    assert payload["risk_level"] == "HIGH"
     assert payload["predicted_metric"] == "dissolved_oxygen"
     assert payload["predicted_value"] == 2.45
     assert "oxy viên" in payload["action_suggestion"]
@@ -166,6 +168,127 @@ async def test_rabbitmq_offline_graceful_degradation(monkeypatch):
     await offline_pub.close()
 
 
+class ClosableConnection:
+    def __init__(self, channel=None):
+        self.channel_instance = channel
+        self.is_closed = False
+
+    async def channel(self):
+        return self.channel_instance
+
+    async def close(self):
+        self.is_closed = True
+
+
+class HangingSetupChannel:
+    def __init__(self):
+        self.is_closed = False
+
+    async def declare_exchange(self, *args, **kwargs):
+        await asyncio.Event().wait()
+
+    async def close(self):
+        self.is_closed = True
+
+
+@pytest.mark.asyncio
+async def test_rabbitmq_connect_refused_returns_quickly(monkeypatch):
+    async def refused(*args, **kwargs):
+        raise ConnectionRefusedError("broker offline")
+
+    monkeypatch.setattr("app.services.rabbitmq_publisher.aio_pika.connect_robust", refused)
+    publisher = RabbitMQPublisher(connect_timeout_seconds=0.1)
+    started = time.monotonic()
+
+    assert await publisher.connect() is False
+    assert time.monotonic() - started < 0.5
+    assert await publisher.ping() is False
+
+
+@pytest.mark.asyncio
+async def test_rabbitmq_connect_timeout_cancels_shared_robust_task(monkeypatch):
+    cancelled = asyncio.Event()
+    calls = 0
+
+    async def nonresponsive(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr("app.services.rabbitmq_publisher.aio_pika.connect_robust", nonresponsive)
+    publisher = RabbitMQPublisher(connect_timeout_seconds=0.05)
+
+    assert await publisher.connect() is False
+    await asyncio.wait_for(cancelled.wait(), timeout=0.25)
+    assert calls == 1
+    assert publisher._connect_task is None
+    assert await publisher.ping() is False
+
+
+@pytest.mark.asyncio
+async def test_rabbitmq_connect_timeout_closes_partially_initialized_resources(monkeypatch):
+    channel = HangingSetupChannel()
+    connection = ClosableConnection(channel)
+
+    async def partially_connected(*args, **kwargs):
+        return connection
+
+    monkeypatch.setattr("app.services.rabbitmq_publisher.aio_pika.connect_robust", partially_connected)
+    publisher = RabbitMQPublisher(connect_timeout_seconds=0.05)
+
+    assert await publisher.connect() is False
+    assert channel.is_closed is True
+    assert connection.is_closed is True
+    assert publisher._connection is None
+    assert publisher._channel is None
+    assert publisher._exchange is None
+
+
+@pytest.mark.asyncio
+async def test_rabbitmq_concurrent_offline_connects_share_one_attempt(monkeypatch):
+    calls = 0
+
+    async def nonresponsive(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("app.services.rabbitmq_publisher.aio_pika.connect_robust", nonresponsive)
+    publisher = RabbitMQPublisher(connect_timeout_seconds=0.05)
+
+    assert await asyncio.gather(*(publisher.connect() for _ in range(5))) == [False] * 5
+    assert calls == 1
+    assert publisher._connect_task is None
+
+
+@pytest.mark.asyncio
+async def test_rabbitmq_recovers_after_failed_connection(monkeypatch):
+    attempts = 0
+    exchange = MockExchange()
+    channel = MockChannel(exchange)
+    connection = ClosableConnection(channel)
+
+    async def fail_then_connect(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ConnectionRefusedError("broker offline")
+        return connection
+
+    monkeypatch.setattr("app.services.rabbitmq_publisher.aio_pika.connect_robust", fail_then_connect)
+    publisher = RabbitMQPublisher(connect_timeout_seconds=0.1)
+
+    assert await publisher.connect() is False
+    assert await publisher.connect() is True
+    assert await publisher.ping() is True
+    assert attempts == 2
+    await publisher.close()
+
+
 # ==============================================================================
 # 3. Tests cho Tự động Đẩy Event qua API Endpoints khi Nguy Cơ Cao
 # ==============================================================================
@@ -201,7 +324,7 @@ def test_api_feeding_forecast_publishes_event_on_critical_risk(client):
     event = exchange.published_messages[0]["payload"]
     assert event["event"] == "ai.risk.detected"
     assert event["pond_id"] == pond_id
-    assert event["risk_level"] == "CRITICAL"
+    assert event["risk_level"] == "HIGH"
     assert event["predicted_metric"] == "feeding_intake"
 
 
@@ -235,7 +358,7 @@ def test_api_predict_publishes_event_on_danger(client):
     event = exchange.published_messages[0]["payload"]
     assert event["event"] == "ai.risk.detected"
     assert event["pond_id"] == pond_id
-    assert event["risk_level"] == "DANGER"
+    assert event["risk_level"] == "HIGH"
     assert event["predicted_metric"] == "dissolved_oxygen"
 
 
